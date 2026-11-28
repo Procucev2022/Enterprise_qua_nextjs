@@ -111,8 +111,10 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
         isBuyerUploaded: true,
       });
 
-      expect(email.html).toContain('Dear <strong>chandan</strong>');
+      expect(email.html).not.toContain('Dear <strong>chandan</strong>');
+      expect(email.html).not.toContain('Hello,');
       expect(email.html).toContain('Greetings from <strong>Procucev!</strong>');
+      expect(email.html).toContain('Mandatory Quotation Information Required:');
       // Buyer company name MUST be visible
       expect(email.html).toContain('We have a new verified business enquiry from <strong>Veera solutions pvt ltd</strong> that matches your category.');
       // Preserves all other RFQ details, branding, and variables
@@ -140,8 +142,10 @@ describe('Conditionally Display Buyer Company Name in Vendor Email Templates', (
         isBuyerUploaded: false,
       });
 
-      expect(email.html).toContain('Dear <strong>chandan</strong>');
+      expect(email.html).not.toContain('Dear <strong>chandan</strong>');
+      expect(email.html).not.toContain('Hello,');
       expect(email.html).toContain('Greetings from <strong>Procucev!</strong>');
+      expect(email.html).toContain('Mandatory Quotation Information Required:');
       // Buyer company name MUST be hidden
       expect(email.html).not.toContain('Veera solutions pvt ltd');
       expect(email.html).toContain('We have a new verified business enquiry that matches your category. Please review the details below:');

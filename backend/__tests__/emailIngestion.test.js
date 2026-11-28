@@ -151,7 +151,7 @@ describe('emailIngestionService.parseEmailMessage', () => {
     expect(message.messageId).toBe('<REQ-2026-0914.project.procurement@lt-heavy.com>');
     expect(message.fromAddress).toBe('project.procurement@lt-heavy.com');
     expect(message.fromName).toBe('Rajesh Iyer');
-    expect(message.toAddress).toBe('client@procucev.com');
+    expect(message.toAddress).toBe('rfq@procucev.com');
     expect(message.subject).toContain('Centrifugal Pumps');
     expect(message.sentAt).toBe('2026-09-07T03:44:22.000Z');
     expect(message.bodyText).toContain('Centrifugal Pump, 150 m3/hr');

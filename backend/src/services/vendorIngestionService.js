@@ -32,6 +32,7 @@
 
 const queries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const identityQueries = require('../db/identityQueries');
 const categorizationService = require('./vendorCategorizationService');
 const mailerService = require('./mailerService');
 const storeService = require('./storeService');
@@ -110,9 +111,11 @@ async function resolveBuyerContext(sessionUser) {
     throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.SESSION_MISSING_USER, 401);
   }
 
+  const resolvedRole = sessionUser.role || lookup.profile.role || null;
   return {
     userId: lookup.profile.userId,
     email: sessionUser.email || lookup.profile.contactEmail || '',
+    ...(resolvedRole ? { role: resolvedRole } : {}),
     organizationId: lookup.profile.organizationId,
     organizationName: lookup.profile.companyName || sessionUser.orgName || '',
   };
@@ -1630,12 +1633,27 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     buyerEmail: existing?.buyerEmail || attributedBuyerEmail,
   };
 
+  const isCmActor =
+    String(context?.role || '').toLowerCase() === 'category_manager' ||
+    String(context?.role || '').toLowerCase() === 'admin' ||
+    context?.isCategoryManager === true;
+  if (isCmActor && !existing) {
+    payload.createdByRole = context.role || 'category_manager';
+    payload.isCmCreated = true;
+  }
+
   const vendor = existing
     ? await storeService.updateVendorDurably(existing.id, payload)
     : await storeService.empanelIngestedVendor(payload, context.email);
 
   if (vendor) {
     await queries.attachVendorId(mapping.id, context.organizationId, vendor.id);
+    if (!existing && isCmActor && vendor.email && typeof storeService.provisionVendorOnboarding === 'function') {
+      await storeService.provisionVendorOnboarding(vendor, context.email, {
+        mailboxChannel: 'direct',
+        isCmCreated: true,
+      });
+    }
   } else {
     logger.warn('Approved vendor mapping was saved but its vendor record was not available for attachment', {
       mappingId: mapping.id,
@@ -1876,6 +1894,10 @@ async function previewDispatch(sessionUser, sessionId, payload) {
 
 /** Build the message for one recipient from the chosen template. */
 function buildDispatchMessage(context, template, recipient) {
+  const isCmContext =
+    String(context?.role || '').toLowerCase() === 'category_manager' ||
+    String(context?.role || '').toLowerCase() === 'admin' ||
+    context?.isCategoryManager === true;
   const shared = {
     to: recipient.email,
     recipientName: recipient.contactPerson || recipient.companyName,
@@ -1883,6 +1905,7 @@ function buildDispatchMessage(context, template, recipient) {
     vendorCode: recipient.vendorCode,
     contactPhone: recipient.contactPhone || recipient.phone || '',
     tempPassword: recipient.tempPassword || '',
+    ...(isCmContext ? { mailboxChannel: 'direct', isCmCreated: true } : {}),
   };
 
   if (template === VENDOR_DISPATCH_TEMPLATE.SELF_MAP_REQUIRED) {
@@ -2046,8 +2069,36 @@ async function deliverToRecipients(context, { sessionId, dispatchId, template, r
     }
 
     try {
-      const message = buildDispatchMessage(context, template, recipient);
-      const delivery = await mailerService.sendVendorIngestionEmail(message, template);
+      const isCmContext =
+        String(context?.role || '').toLowerCase() === 'category_manager' ||
+        String(context?.role || '').toLowerCase() === 'admin' ||
+        context?.isCategoryManager === true;
+      let effectiveRecipient = recipient;
+      if (isCmContext && !recipient.tempPassword && typeof identityQueries.findUserByEmail === 'function') {
+        const existingIdentity = await identityQueries.findUserByEmail(recipient.email).catch(() => null);
+        if (!existingIdentity && typeof storeService._generateTempPassword === 'function') {
+          const tempPassword = storeService._generateTempPassword();
+          const createdIdentity = await identityQueries.insertVendorAccount({
+            email: recipient.email,
+            password: tempPassword,
+            phone: recipient.phone || recipient.contactPhone || null,
+            fullName: recipient.contactPerson || recipient.companyName || recipient.email,
+            organizationName: recipient.companyName || recipient.email,
+            createdBy: context.email || 'category-manager-ingestion',
+            resetExisting: false,
+            resetPasswordRequired: true,
+          });
+          if (createdIdentity && createdIdentity.created) {
+            effectiveRecipient = { ...recipient, tempPassword };
+          }
+        }
+      }
+      const message = buildDispatchMessage(context, template, effectiveRecipient);
+      const delivery = await mailerService.sendVendorIngestionEmail(
+        message,
+        template,
+        isCmContext ? { vendorChannel: 'direct' } : undefined
+      );
       if (delivery.sent) {
         await queries.markEmailSent(slot.id, context.organizationId, delivery.messageId);
         sent += 1;

@@ -5,28 +5,19 @@
  * drives the rest of the Category Manager sellers directory: sparse or malformed
  * supplier records and their fallbacks, failed and superseded vendor lookups, the
  * search debounce, the source / rating / category filters, pagination with
- * ellipses, dossier tabs for partially populated RFQs, and the Excel export.
+ * ellipses, and dossier tabs for partially populated RFQs.
  */
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import SellersDirectory from '@/app/category-manager/sellers-directory';
 import { useApp } from '@/lib/store';
-import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import { RFQ_MODES, formatIndianDateTime } from '@/lib/constants';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
-
-jest.mock('@/lib/reportsClient', () => {
-  const actual = jest.requireActual('@/lib/reportsClient');
-  return {
-    ...actual,
-    exportReportToExcel: jest.fn(),
-  };
-});
 
 jest.mock('@/lib/rfqClient', () => {
   const actual = jest.requireActual('@/lib/rfqClient');
@@ -40,7 +31,6 @@ type Fixture = Record<string, unknown>;
 
 const mockUseApp = useApp as jest.Mock;
 const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
-const mockExportReport = reportsClient.exportReportToExcel as jest.Mock;
 
 const SEARCHING_HINT = 'Searching...';
 const NO_RESULTS_MESSAGE = UI_STRINGS.sellerDirectory.noSellersFound;
@@ -48,7 +38,6 @@ const DOSSIER_BUTTON = /360° Dossier/;
 const SEARCH_PLACEHOLDER = /Search company/i;
 const DEBOUNCE_MS = 350;
 const TOAST_MS = 4000;
-const FIXED_NOW_ISO = '2026-05-10T10:00:00.000Z';
 
 const DOSSIER_SELLER: Fixture = {
   id: 'v-dossier',
@@ -203,7 +192,6 @@ describe('SellersDirectory coverage companion', () => {
   beforeEach(() => {
     mockUseApp.mockReset();
     mockFetchAllVendors.mockReset();
-    mockExportReport.mockReset();
     setStore({ buyerVendors: [], rfqs: [], auditLogs: [], categoryTaxonomy: [] });
     setVendorResponse([]);
   });
@@ -855,110 +843,14 @@ describe('SellersDirectory coverage companion', () => {
     });
   });
 
-  describe('directory export', () => {
-    test('exports every matching supplier, not just the visible page, under a dated file name', async () => {
-      jest.useFakeTimers({ now: new Date(FIXED_NOW_ISO) });
-      setVendorResponse(networkVendors(25));
-      setStore({ buyerVendors: uploadedVendors(60) });
-      await renderDirectoryWithFakeTimers();
-      expectShowing(1, 10, 85);
-
-      fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
-
-      expect(mockExportReport).toHaveBeenCalledTimes(1);
-      const [allRows, fileName, sheetName] = mockExportReport.mock.calls[0];
-      expect(allRows).toHaveLength(85);
-      expect(fileName).toBe('Vendors_Directory_2026-05-10');
-      expect(sheetName).toBe('VendorsDirectory');
-
-      fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value: 'Client Supplier 0' } });
-      fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
-
-      expect(mockExportReport).toHaveBeenCalledTimes(2);
-      const filteredRows = mockExportReport.mock.calls[1][0];
-      expect(filteredRows).toHaveLength(9);
-      expect(filteredRows[0]).toEqual(expect.objectContaining({ CompanyName: 'Client Supplier 01' }));
-    });
-
-    test('exports sparse suppliers with source labels, login stamps and default values', async () => {
-      setVendorResponse([
-        { email: 'bare@supplier.example', last_login_at: '2026-03-02T11:00:00Z', serviceLocations: [] },
-        {
-          id: 'n-2',
-          name: 'Named Network',
-          source: 'procucev_network',
-          contactPerson: 'Asha Rao',
-          phone: '+91 91111 11111',
-          location: 'Pune',
-          deliveryLocation: 'Pune, Nashik',
-          majorCategory: 'Packaging',
-          matchScore: 91,
-          rating: 4.7,
-          status: 'ACTIVE',
-          freeQuotationCredits: 0,
-          rfqDownloadsUsed: 0,
-        },
-      ]);
-      setStore({
-        buyerVendors: [{ id: 'u-1', name: 'Uploaded Client', contactPerson: 'Dev', email: 'dev@client.example' }],
-      });
+  describe('directory toolbar', () => {
+    test('does not render the Export Directory button while preserving the column settings control', async () => {
+      setVendorResponse(networkVendors(2));
+      setStore({ buyerVendors: uploadedVendors(1) });
       await renderDirectory();
 
-      fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
-
-      expect(mockExportReport).toHaveBeenCalledTimes(1);
-      // Missing values export as a dash. A source is labelled only when the record holds one, and no score, credit or location is invented.
-      const emptyCell = UI_STRINGS.dataLoad.emptyCell;
-      expect(mockExportReport.mock.calls[0][0]).toEqual([
-        {
-          CompanyName: emptyCell,
-          ContactPerson: emptyCell,
-          Email: 'bare@supplier.example',
-          Phone: emptyCell,
-          CompanyLocation: emptyCell,
-          DeliveryLocation: emptyCell,
-          LastLogin: formatIndianDateTime('2026-03-02T11:00:00.000Z'),
-          Source: emptyCell,
-          MajorCategory: emptyCell,
-          AIScore: emptyCell,
-          StarRating: emptyCell,
-          FreeQuotationCredits: emptyCell,
-          RFQDownloadsUsed: emptyCell,
-          Status: emptyCell,
-        },
-        {
-          CompanyName: 'Named Network',
-          ContactPerson: 'Asha Rao',
-          Email: emptyCell,
-          Phone: '+91 91111 11111',
-          CompanyLocation: 'Pune',
-          DeliveryLocation: 'Pune, Nashik',
-          LastLogin: emptyCell,
-          Source: 'Procucev Network',
-          MajorCategory: 'Packaging',
-          AIScore: 91,
-          StarRating: 4.7,
-          FreeQuotationCredits: 0,
-          RFQDownloadsUsed: 0,
-          Status: 'ACTIVE',
-        },
-        {
-          CompanyName: 'Uploaded Client',
-          ContactPerson: 'Dev',
-          Email: 'dev@client.example',
-          Phone: emptyCell,
-          CompanyLocation: emptyCell,
-          DeliveryLocation: emptyCell,
-          LastLogin: emptyCell,
-          Source: 'Buyer Uploaded',
-          MajorCategory: emptyCell,
-          AIScore: emptyCell,
-          StarRating: emptyCell,
-          FreeQuotationCredits: emptyCell,
-          RFQDownloadsUsed: emptyCell,
-          Status: emptyCell,
-        },
-      ]);
+      expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Customize Columns' })).toBeInTheDocument();
     });
   });
 
@@ -1143,8 +1035,7 @@ describe('SellersDirectory coverage companion', () => {
         fireEvent.click(th);
       }
 
-      const exportBtn = screen.getByRole('button', { name: /Export Directory/i });
-      fireEvent.click(exportBtn);
+      expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
     });
 
 });

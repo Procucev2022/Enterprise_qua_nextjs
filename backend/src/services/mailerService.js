@@ -9,6 +9,10 @@ const {
   RFQ_NOT_CREATED_NOTIFICATION,
   RFQ_MINOR_SHORTFALL_ALERT,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
+  VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_ORIGINS,
   VENDOR_FREE_CREDITS_LIMIT,
   EMAIL_REGEX,
   isRfqConcluded,
@@ -29,6 +33,8 @@ const {
   buildEmail11_QuoteSubmitted,
   buildEmail12_RfqRevisedBuyerQuestion,
   buildEmail13_CompleteYourProfile,
+  buildVendorInvitePortalRedirectTemplate,
+  buildCmVendorOnboardingTemplate,
   renderTransactionalEmail,
 } = require('./transactionalEmailTemplates');
 
@@ -261,34 +267,297 @@ function getVendorTransporter() {
   return vendorTransporter;
 }
 
-function vendorFromAddress() {
-  // No default sender: a personal mailbox must never be used when the vendor sender is unset.
-  const user = getEnv('VENDOR_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_SMTP_FROM') || getEnv('VENDOR_SMTP_USER') || '';
+const VENDOR_ROLE_PLACEHOLDER_DEFAULT = 'A buyer on Procucev';
+
+function formatVendorSenderAddress(user) {
   if (!user) return '';
-  if (user.includes('<') && user.includes('>')) {
-    return user;
+  const trimmed = String(user).trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('<') && trimmed.includes('>')) {
+    return trimmed;
   }
-  return `"Procucev Enterprise" <${user}>`;
+  return `"Procucev Enterprise" <${trimmed}>`;
 }
 
-function vendorGatewayAddress() {
+function bareVendorAddress(value) {
+  return mailTransport.bareAddress(value).toLowerCase();
+}
+
+function isCmCreatedVendor(vendor, context = {}) {
+  const ctx = context || {};
+  const v = vendor || ctx.vendor || null;
+  if (ctx.isCmCreated === true || ctx.createdByCategoryManager === true) return true;
+  if (v && (v.isCmCreated === true || v.createdByCategoryManager === true)) return true;
+  if (String(ctx.createdByRole || '').toLowerCase() === 'category_manager') return true;
+  if (v && String(v.createdByRole || '').toLowerCase() === 'category_manager') return true;
+  if (ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_CREATED) return true;
+  return false;
+}
+
+function isCmAssignedVendor(vendor, context = {}, rfq = {}) {
+  const ctx = context || {};
+  const v = vendor || ctx.vendor || null;
+  if (ctx.isCmAssigned === true || ctx.assignedByCm === true) return true;
+  if (v && (v.isCmAssigned === true || v.assignedByCm === true)) return true;
+  if (ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_ASSIGNED) return true;
+  const actorRole = String(ctx.assignedByRole || ctx.invitedByRole || ctx.actorRole || '').toLowerCase();
+  if (actorRole === 'category_manager' || actorRole === 'admin') return true;
+  const assignedList = Array.isArray(rfq?.assignedVendors) ? rfq.assignedVendors : [];
+  if (assignedList.length > 0 && v) {
+    const vid = v.id ? String(v.id) : null;
+    const vemail = String(v.email || v.corporateEmail || '').trim().toLowerCase();
+    const entry = assignedList.find((item) =>
+      item && (
+        (vid && (String(item.id || '') === vid || String(item.vendorId || '') === vid)) ||
+        (vemail && String(item.email || item.corporateEmail || '').trim().toLowerCase() === vemail)
+      )
+    );
+    if (entry && (
+      entry.isCmAssigned === true ||
+      entry.isCmCreated === true ||
+      entry.inviteChannel === VENDOR_MAILBOX_CHANNELS.DIRECT ||
+      entry.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_ASSIGNED ||
+      entry.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_CREATED
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function inferVendorChannelFromAddress(address) {
+  const clean = bareVendorAddress(address);
+  if (!clean) return null;
+  const inviteAddr = bareVendorAddress(getEnv('VENDOR_INVITE_EMAIL_ADDRESS') || getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL'));
+  const directAddr = bareVendorAddress(getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') || getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL'));
+  if (inviteAddr && clean === inviteAddr && clean !== directAddr) {
+    return VENDOR_MAILBOX_CHANNELS.INVITE;
+  }
+  if (directAddr && clean === directAddr) {
+    return VENDOR_MAILBOX_CHANNELS.DIRECT;
+  }
+  return null;
+}
+
+function hasDualVendorMailboxesConfigured() {
+  return Boolean(
+    getEnv('VENDOR_INVITE_EMAIL_ADDRESS') ||
+    getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL') ||
+    getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') ||
+    getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL')
+  );
+}
+
+/**
+ * Determine the outbound vendor mailbox channel, invite origin, and reply-to-quote eligibility
+ * from vendor source and assignment context.
+ */
+function resolveVendorInviteRouting(vendorOrOptions, context = {}, rfq = null) {
+  let vendor = vendorOrOptions;
+  let ctx = context || {};
+  if (
+    vendorOrOptions &&
+    typeof vendorOrOptions === 'object' &&
+    !vendorOrOptions.email &&
+    !vendorOrOptions.id &&
+    Object.keys(ctx).length === 0
+  ) {
+    ctx = vendorOrOptions;
+    vendor = ctx.vendor || null;
+  }
+  if (typeof vendorOrOptions === 'string') {
+    const ch = vendorOrOptions === VENDOR_MAILBOX_CHANNELS.INVITE
+      ? VENDOR_MAILBOX_CHANNELS.INVITE
+      : VENDOR_MAILBOX_CHANNELS.DIRECT;
+    return {
+      channel: ch,
+      origin: ch === VENDOR_MAILBOX_CHANNELS.INVITE ? VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK : VENDOR_INVITE_ORIGINS.CM_ASSIGNED,
+      replyToQuoteAllowed: ch !== VENDOR_MAILBOX_CHANNELS.INVITE,
+      from: vendorFromAddress({ channel: ch }),
+      replyTo: vendorGatewayAddress({ channel: ch }),
+    };
+  }
+
+  const effectiveRfq = rfq || ctx.rfq || null;
+  const effectiveVendor = ctx.vendor || vendor || null;
+  const explicitChannel = ctx.mailboxChannel || ctx.inviteChannel || ctx.channel;
+  const senderInferred = inferVendorChannelFromAddress(ctx.senderMailbox || ctx.from);
+
+  let channel = null;
+  let origin = ctx.inviteOrigin || null;
+
+  if (explicitChannel === VENDOR_MAILBOX_CHANNELS.DIRECT) {
+    channel = VENDOR_MAILBOX_CHANNELS.DIRECT;
+  } else if (explicitChannel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+    channel = VENDOR_MAILBOX_CHANNELS.INVITE;
+  } else if (senderInferred) {
+    channel = senderInferred;
+  } else if (typeof ctx.replyToQuoteAllowed === 'boolean') {
+    channel = ctx.replyToQuoteAllowed ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE;
+  } else if (
+    ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.BUYER_UPLOADED ||
+    ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_ASSIGNED ||
+    ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_CREATED
+  ) {
+    channel = VENDOR_MAILBOX_CHANNELS.DIRECT;
+  } else if (ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK) {
+    channel = VENDOR_MAILBOX_CHANNELS.INVITE;
+  } else if (isCmCreatedVendor(effectiveVendor, ctx)) {
+    channel = VENDOR_MAILBOX_CHANNELS.DIRECT;
+    origin = origin || VENDOR_INVITE_ORIGINS.CM_CREATED;
+  } else if (isCmAssignedVendor(effectiveVendor, ctx, effectiveRfq)) {
+    channel = VENDOR_MAILBOX_CHANNELS.DIRECT;
+    origin = origin || VENDOR_INVITE_ORIGINS.CM_ASSIGNED;
+  } else if (isBuyerUploadedVendor(effectiveVendor, ctx, effectiveRfq)) {
+    channel = VENDOR_MAILBOX_CHANNELS.DIRECT;
+    origin = origin || VENDOR_INVITE_ORIGINS.BUYER_UPLOADED;
+  } else {
+    channel = VENDOR_MAILBOX_CHANNELS.INVITE;
+    origin = origin || VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK;
+  }
+
+  if (!origin) {
+    if (channel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+      origin = VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK;
+    } else if (isCmCreatedVendor(effectiveVendor, ctx)) {
+      origin = VENDOR_INVITE_ORIGINS.CM_CREATED;
+    } else if (isCmAssignedVendor(effectiveVendor, ctx, effectiveRfq)) {
+      origin = VENDOR_INVITE_ORIGINS.CM_ASSIGNED;
+    } else {
+      origin = VENDOR_INVITE_ORIGINS.BUYER_UPLOADED;
+    }
+  }
+
+  // Preserve legacy reply-to-quote copy when dual-mailbox env vars are unset and no
+  // invite-only signal was requested explicitly.
+  const dualConfigured = hasDualVendorMailboxesConfigured();
+  const explicitInviteOnly =
+    explicitChannel === VENDOR_MAILBOX_CHANNELS.INVITE ||
+    ctx.replyToQuoteAllowed === false ||
+    ctx.inviteOrigin === VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK ||
+    Boolean(effectiveVendor && effectiveVendor.inviteChannel === VENDOR_MAILBOX_CHANNELS.INVITE) ||
+    Boolean(effectiveVendor && effectiveVendor.replyToQuoteAllowed === false);
+  const replyToQuoteAllowed =
+    channel === VENDOR_MAILBOX_CHANNELS.DIRECT
+      ? true
+      : (dualConfigured || explicitInviteOnly ? false : true);
+
+  return {
+    channel,
+    origin,
+    replyToQuoteAllowed,
+    from: vendorFromAddress({ channel }),
+    replyTo: vendorGatewayAddress({ channel }),
+  };
+}
+
+function normalizeVendorAddressOption(options) {
+  if (!options) return null;
+  if (typeof options === 'string') {
+    return options === VENDOR_MAILBOX_CHANNELS.INVITE
+      ? VENDOR_MAILBOX_CHANNELS.INVITE
+      : (options === VENDOR_MAILBOX_CHANNELS.DIRECT ? VENDOR_MAILBOX_CHANNELS.DIRECT : inferVendorChannelFromAddress(options));
+  }
+  if (typeof options === 'object') {
+    const ch = options.channel || options.mailboxChannel || options.inviteChannel;
+    if (ch === VENDOR_MAILBOX_CHANNELS.INVITE || ch === VENDOR_MAILBOX_CHANNELS.DIRECT) return ch;
+    const fromInferred = inferVendorChannelFromAddress(options.from || options.senderMailbox);
+    if (fromInferred) return fromInferred;
+    if (typeof options.replyToQuoteAllowed === 'boolean') {
+      return options.replyToQuoteAllowed ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE;
+    }
+    if (options.vendor || options.isBuyerUploaded !== undefined || options.isCmAssigned !== undefined || options.isCmCreated !== undefined || options.rfq) {
+      return resolveVendorInviteRouting(options.vendor || null, options, options.rfq || null).channel;
+    }
+  }
+  return null;
+}
+
+function vendorFromAddress(options) {
+  // No default sender: a personal mailbox must never be used when the vendor sender is unset.
+  const channel = normalizeVendorAddressOption(options);
+  let user = '';
+  if (channel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+    user =
+      getEnv('VENDOR_INVITE_EMAIL_ADDRESS') ||
+      getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_INVITE_SMTP_FROM') ||
+      getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_SMTP_FROM') ||
+      getEnv('VENDOR_SMTP_USER') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+      '';
+  } else if (channel === VENDOR_MAILBOX_CHANNELS.DIRECT) {
+    user =
+      getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') ||
+      getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_DIRECT_RFQ_SMTP_FROM') ||
+      getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_SMTP_FROM') ||
+      getEnv('VENDOR_SMTP_USER') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+      '';
+  } else {
+    user =
+      getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') ||
+      getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_SMTP_FROM') ||
+      getEnv('VENDOR_SMTP_USER') ||
+      getEnv('VENDOR_INVITE_EMAIL_ADDRESS') ||
+      '';
+  }
+  return formatVendorSenderAddress(user);
+}
+
+function vendorGatewayAddress(options) {
+  const channel = normalizeVendorAddressOption(options);
+  if (channel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+    return (
+      getEnv('VENDOR_INVITE_EMAIL_ADDRESS') ||
+      getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+      getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
+      getEnv('VENDOR_SMTP_USER') ||
+      ''
+    );
+  }
+  if (channel === VENDOR_MAILBOX_CHANNELS.DIRECT) {
+    return (
+      getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') ||
+      getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+      getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+      getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
+      getEnv('VENDOR_SMTP_USER') ||
+      ''
+    );
+  }
   return (
+    getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') ||
     getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
     getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
     getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
     getEnv('VENDOR_SMTP_USER') ||
+    getEnv('VENDOR_INVITE_EMAIL_ADDRESS') ||
     ''
   );
 }
 
 /**
- * Send one message on the vendor channel: the vendor mailbox (Gmail API, then
- * its own SMTP off Workers), then the shared buyer mailbox and any pooled or
- * HTTP providers. Replies are always routed to the vendor gateway inbox so
- * quote replies are ingested whichever mailbox the message left from.
+ * Send one message on the vendor channel: the channel's mailbox (Gmail API, then
+ * vendor SMTP off Workers), then shared/pooled/HTTP providers. Reply-To is kept
+ * aligned with the selected vendor mailbox so replies return to the right inbox.
  */
-async function deliverVendor(message, label) {
-  return routeDelivery(message, label, { channel: DELIVERY_CHANNEL.VENDOR });
+async function deliverVendor(message, label, options = {}) {
+  const inferredChannel =
+    options.vendorChannel ||
+    normalizeVendorAddressOption({ from: message?.from || message?.replyTo });
+  return routeDelivery(message, label, {
+    ...options,
+    channel: DELIVERY_CHANNEL.VENDOR,
+    ...(inferredChannel ? { vendorChannel: inferredChannel } : {}),
+  });
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -443,20 +712,53 @@ function tokenFingerprint(token) {
  * the one OAuth app (GMAIL_CLIENT_ID/SECRET); each token is its own mailbox
  * with its own sending quota.
  */
-function getGmailClientId() {
+function getGmailClientId(identityId = null) {
+  if (identityId === 'vendorInvite') {
+    return getEnv('VENDOR_INVITE_GMAIL_CLIENT_ID') || getEnv('VENDOR_GMAIL_CLIENT_ID') || getEnv('GMAIL_CLIENT_ID');
+  }
+  if (identityId === 'vendorDirect' || identityId === 'vendor') {
+    return getEnv('VENDOR_DIRECT_RFQ_GMAIL_CLIENT_ID') || getEnv('VENDOR_GMAIL_CLIENT_ID') || getEnv('GMAIL_CLIENT_ID');
+  }
   return getEnv('GMAIL_CLIENT_ID') || getEnv('VENDOR_GMAIL_CLIENT_ID');
 }
 
-function getGmailClientSecret() {
+function getGmailClientSecret(identityId = null) {
+  if (identityId === 'vendorInvite') {
+    return getEnv('VENDOR_INVITE_GMAIL_CLIENT_SECRET') || getEnv('VENDOR_GMAIL_CLIENT_SECRET') || getEnv('GMAIL_CLIENT_SECRET');
+  }
+  if (identityId === 'vendorDirect' || identityId === 'vendor') {
+    return getEnv('VENDOR_DIRECT_RFQ_GMAIL_CLIENT_SECRET') || getEnv('VENDOR_GMAIL_CLIENT_SECRET') || getEnv('GMAIL_CLIENT_SECRET');
+  }
   return getEnv('GMAIL_CLIENT_SECRET') || getEnv('VENDOR_GMAIL_CLIENT_SECRET');
 }
 
 function gmailIdentities() {
-  if (!getGmailClientId() || !getGmailClientSecret()) return [];
+  const baseClientId = getGmailClientId();
+  const baseClientSecret = getGmailClientSecret();
   const identities = [
     { id: 'otp', refreshToken: getEnv('OTP_GMAIL_REFRESH_TOKEN'), sender: getEnv('OTP_GMAIL_SENDER_EMAIL') },
     { id: 'buyer', refreshToken: getEnv('GMAIL_REFRESH_TOKEN'), sender: getEnv('GMAIL_SENDER_EMAIL') },
-    { id: 'vendor', refreshToken: getEnv('VENDOR_GMAIL_REFRESH_TOKEN'), sender: getEnv('VENDOR_GMAIL_SENDER_EMAIL') },
+    {
+      id: 'vendorDirect',
+      refreshToken: getEnv('VENDOR_DIRECT_RFQ_GMAIL_REFRESH_TOKEN'),
+      sender: getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS'),
+      clientId: getGmailClientId('vendorDirect'),
+      clientSecret: getGmailClientSecret('vendorDirect'),
+    },
+    {
+      id: 'vendorInvite',
+      refreshToken: getEnv('VENDOR_INVITE_GMAIL_REFRESH_TOKEN'),
+      sender: getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_INVITE_EMAIL_ADDRESS'),
+      clientId: getGmailClientId('vendorInvite'),
+      clientSecret: getGmailClientSecret('vendorInvite'),
+    },
+    {
+      id: 'vendor',
+      refreshToken: getEnv('VENDOR_GMAIL_REFRESH_TOKEN'),
+      sender: getEnv('VENDOR_GMAIL_SENDER_EMAIL'),
+      clientId: getGmailClientId('vendor'),
+      clientSecret: getGmailClientSecret('vendor'),
+    },
     { id: 'quoteAlert', refreshToken: getEnv('QUOTE_ALERT_GMAIL_REFRESH_TOKEN'), sender: getEnv('QUOTE_ALERT_GMAIL_SENDER_EMAIL') },
   ];
   const poolTokens = mailTransport.splitList(getEnv('GMAIL_POOL_REFRESH_TOKENS'));
@@ -464,11 +766,16 @@ function gmailIdentities() {
   poolTokens.forEach((refreshToken, index) => {
     identities.push({ id: `pool${index + 1}`, refreshToken, sender: poolSenders[index] });
   });
-  return identities.filter((identity) => Boolean(identity.refreshToken));
+  return identities.filter((identity) => {
+    const cid = identity.clientId || baseClientId;
+    const csec = identity.clientSecret || baseClientSecret;
+    return Boolean(cid && csec && identity.refreshToken);
+  });
 }
 
 function findGmailIdentity(id) {
-  return gmailIdentities().find((identity) => identity.id === id);
+  const normalizedId = id === 'vendor_invite' ? 'vendorInvite' : (id === 'vendor_direct' ? 'vendorDirect' : id);
+  return gmailIdentities().find((identity) => identity.id === normalizedId);
 }
 
 const gmailOAuthClients = new Map();
@@ -480,14 +787,18 @@ function googleApi() {
   return require('googleapis').google;
 }
 
-/** One cached OAuth client per identity, rebuilt when its refresh token changes. */
+/** One cached OAuth client per identity, rebuilt when its refresh token or app creds change. */
 function oauthClientFor(identity) {
   if (!identity) return undefined;
+  const cid = identity.clientId || getGmailClientId(identity.id);
+  const csec = identity.clientSecret || getGmailClientSecret(identity.id);
   const cached = gmailOAuthClients.get(identity.id);
-  if (cached && cached.refreshToken === identity.refreshToken) return cached.client;
-  const client = new (googleApi().auth.OAuth2)(getGmailClientId(), getGmailClientSecret());
+  if (cached && cached.refreshToken === identity.refreshToken && cached.clientId === cid && cached.clientSecret === csec) {
+    return cached.client;
+  }
+  const client = new (googleApi().auth.OAuth2)(cid, csec);
   client.setCredentials({ refresh_token: identity.refreshToken });
-  gmailOAuthClients.set(identity.id, { refreshToken: identity.refreshToken, client });
+  gmailOAuthClients.set(identity.id, { refreshToken: identity.refreshToken, clientId: cid, clientSecret: csec, client });
   return client;
 }
 
@@ -512,12 +823,37 @@ function getGmailOAuthClient() {
   return isGmailApiConfigured() ? oauthClientFor(findGmailIdentity('buyer')) : undefined;
 }
 
-function isVendorGmailApiConfigured() {
-  return Boolean(getGmailClientId()) && Boolean(getGmailClientSecret()) && Boolean(getEnv('VENDOR_GMAIL_REFRESH_TOKEN'));
+function isVendorInviteGmailApiConfigured() {
+  return (
+    Boolean(getGmailClientId('vendorInvite')) &&
+    Boolean(getGmailClientSecret('vendorInvite')) &&
+    Boolean(getEnv('VENDOR_INVITE_GMAIL_REFRESH_TOKEN'))
+  );
 }
 
-function getVendorGmailOAuthClient() {
-  return isVendorGmailApiConfigured() ? oauthClientFor(findGmailIdentity('vendor')) : undefined;
+function getVendorInviteGmailOAuthClient() {
+  return isVendorInviteGmailApiConfigured() ? oauthClientFor(findGmailIdentity('vendorInvite')) : undefined;
+}
+
+function isVendorGmailApiConfigured(channel = null) {
+  if (channel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+    return isVendorInviteGmailApiConfigured();
+  }
+  return (
+    Boolean(getGmailClientId('vendorDirect')) &&
+    Boolean(getGmailClientSecret('vendorDirect')) &&
+    Boolean(getEnv('VENDOR_DIRECT_RFQ_GMAIL_REFRESH_TOKEN') || getEnv('VENDOR_GMAIL_REFRESH_TOKEN'))
+  );
+}
+
+function getVendorGmailOAuthClient(channel = null) {
+  if (channel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+    return getVendorInviteGmailOAuthClient();
+  }
+  const directIdentity = findGmailIdentity('vendorDirect');
+  if (directIdentity) return oauthClientFor(directIdentity);
+  const sharedIdentity = findGmailIdentity('vendor');
+  return sharedIdentity ? oauthClientFor(sharedIdentity) : undefined;
 }
 
 /**
@@ -534,15 +870,30 @@ function buyerReplyAddress() {
   return getEnv('GMAIL_SENDER_EMAIL') || fromAddress();
 }
 
-function gmailFromAddress(identity) {
+function gmailFromAddress(identity, message) {
+  const msgFrom = message && message.from ? String(message.from).trim() : '';
+  const msgFromBare = bareVendorAddress(msgFrom);
+  const inviteBare = bareVendorAddress(getEnv('VENDOR_INVITE_EMAIL_ADDRESS') || getEnv('VENDOR_INVITE_GMAIL_SENDER_EMAIL'));
+  const directBare = bareVendorAddress(getEnv('VENDOR_DIRECT_RFQ_EMAIL_ADDRESS') || getEnv('VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL'));
+  const isDualVendorSender = Boolean(
+    msgFromBare && ((inviteBare && msgFromBare === inviteBare) || (directBare && msgFromBare === directBare))
+  );
+  if (identity.id === 'vendorInvite' || identity.id === 'vendorDirect') {
+    if (identity.sender) return formatVendorSenderAddress(identity.sender);
+    if (msgFrom) return msgFrom;
+  }
+  if (identity.id === 'vendor' && isDualVendorSender) {
+    return msgFrom;
+  }
   if (identity.sender) return `"Procucev Enterprise" <${identity.sender}>`;
-  return identity.id === 'vendor' ? vendorFromAddress() : fromAddress();
+  if (identity.id === 'vendor') return msgFrom || vendorFromAddress();
+  return fromAddress();
 }
 
 async function sendViaGmailIdentity(identity, message) {
   const gmail = googleApi().gmail({ version: 'v1', auth: oauthClientFor(identity) });
   const raw = mailTransport.buildRawMimeMessage({
-    from: gmailFromAddress(identity),
+    from: gmailFromAddress(identity, message),
     to: message.to,
     cc: message.cc,
     bcc: message.bcc,
@@ -550,6 +901,7 @@ async function sendViaGmailIdentity(identity, message) {
     html: message.html,
     text: message.text,
     replyTo: message.replyTo,
+    messageId: message.messageId,
     inReplyTo: message.inReplyTo,
     references: message.references,
     headers: message.headers,
@@ -560,17 +912,27 @@ async function sendViaGmailIdentity(identity, message) {
 }
 
 /** The Gmail identities to try for a channel, in order. */
-function gmailRouteFor(channel, critical) {
+function gmailRouteFor(channel, critical, vendorChannel = null) {
   const order = [];
   if (critical) order.push('otp');
-  if (channel === DELIVERY_CHANNEL.VENDOR) order.push('vendor', 'buyer');
-  else if (channel === DELIVERY_CHANNEL.QUOTE_ALERT) order.push('quoteAlert', 'buyer');
-  else order.push('buyer');
+  if (channel === DELIVERY_CHANNEL.VENDOR) {
+    if (vendorChannel === VENDOR_MAILBOX_CHANNELS.INVITE) {
+      order.push('vendorInvite', 'vendor', 'buyer');
+    } else if (vendorChannel === VENDOR_MAILBOX_CHANNELS.DIRECT) {
+      order.push('vendorDirect', 'vendor', 'buyer');
+    } else {
+      order.push('vendorDirect', 'vendor', 'vendorInvite', 'buyer');
+    }
+  } else if (channel === DELIVERY_CHANNEL.QUOTE_ALERT) {
+    order.push('quoteAlert', 'buyer');
+  } else {
+    order.push('buyer');
+  }
 
   const identities = gmailIdentities();
   identities.filter((identity) => identity.id.startsWith('pool')).forEach((identity) => order.push(identity.id));
   // A sign-in code is worth sending from any company mailbox rather than not at all.
-  if (critical) order.push('vendor', 'quoteAlert');
+  if (critical) order.push('vendorDirect', 'vendor', 'vendorInvite', 'quoteAlert');
 
   const seen = new Set();
   return order
@@ -580,7 +942,7 @@ function gmailRouteFor(channel, critical) {
 }
 
 /** Ordered provider steps for one send. Each step: { key, label, run(message) }. */
-function deliveryPlan(channel, critical) {
+function deliveryPlan(channel, critical, vendorChannel = null) {
   const steps = [];
   // SMTP transporters are only built when their step actually runs, so a send
   // that succeeds earlier in the chain never opens an SMTP connection.
@@ -598,7 +960,7 @@ function deliveryPlan(channel, critical) {
   const vendorSmtpStep = () =>
     smtpStep('smtp:vendor', 'vendor SMTP', Boolean(getEnv('VENDOR_SMTP_USER') && getEnv('VENDOR_SMTP_PASSWORD')), getVendorTransporter);
 
-  const route = gmailRouteFor(channel, critical);
+  const route = gmailRouteFor(channel, critical, vendorChannel);
   const gmailSteps = route.map((identity) => ({
     key: gmailProviderKey(identity),
     label: `Gmail API (${identity.id})`,
@@ -608,7 +970,8 @@ function deliveryPlan(channel, critical) {
   // first, when it has none), ahead of borrowing the buyer mailbox.
   if (channel === DELIVERY_CHANNEL.VENDOR && !mailTransport.isWorkersRuntime()) {
     const step = vendorSmtpStep();
-    if (step) gmailSteps.splice(route[0] && route[0].id === 'vendor' ? 1 : 0, 0, step);
+    const firstIsVendor = route[0] && (route[0].id === 'vendor' || route[0].id === 'vendorDirect' || route[0].id === 'vendorInvite');
+    if (step) gmailSteps.splice(firstIsVendor ? 1 : 0, 0, step);
   }
   steps.push(...gmailSteps);
 
@@ -616,7 +979,10 @@ function deliveryPlan(channel, critical) {
     steps.push({
       key: `http:${provider.key}`,
       label: provider.key,
-      run: (message) => provider.send(message, provider.fromAddress() || (channel === DELIVERY_CHANNEL.VENDOR ? vendorFromAddress() : fromAddress())),
+      run: (message) => provider.send(
+        message,
+        provider.fromAddress() || (channel === DELIVERY_CHANNEL.VENDOR ? vendorFromAddress({ channel: vendorChannel, from: message.from }) : fromAddress())
+      ),
     });
   });
 
@@ -629,7 +995,7 @@ function deliveryPlan(channel, critical) {
   if ((channel === DELIVERY_CHANNEL.BUYER || channel === DELIVERY_CHANNEL.VENDOR) && !critical) {
     const used = new Set(route.map((identity) => identity.id));
     const fallbackIds = channel === DELIVERY_CHANNEL.VENDOR ? ['quoteAlert', 'otp'] : ['quoteAlert'];
-    const fallbackReplyTo = channel === DELIVERY_CHANNEL.VENDOR ? vendorGatewayAddress() : buyerReplyAddress();
+    const fallbackReplyTo = channel === DELIVERY_CHANNEL.VENDOR ? vendorGatewayAddress({ channel: vendorChannel }) : buyerReplyAddress();
     fallbackIds
       .filter((id) => !used.has(id))
       .map((id) => findGmailIdentity(id))
@@ -675,7 +1041,7 @@ function wait(ms) {
  * every one of them failed or is cooling down — a real failure the caller must
  * see, never a silent drop.
  */
-async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER, critical = false } = {}) {
+async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER, critical = false, vendorChannel = null } = {}) {
   if (process.env.NODE_ENV === 'test') {
     return { sent: false, success: false, status: 'skipped', reason: 'test environment' };
   }
@@ -697,14 +1063,17 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
     ...message,
     to: Array.isArray(message.to) ? validTo : validTo.join(', '),
   };
-  // Vendor replies must reach the vendor gateway inbox even when the message is
-  // sent from a borrowed (buyer/pool) mailbox, or quote replies are lost.
-  const gatewayAddress = vendorGatewayAddress();
+  const resolvedVendorChannel =
+    vendorChannel ||
+    normalizeVendorAddressOption({ from: outgoing.from || outgoing.replyTo });
+  // Vendor replies must reach the matching vendor mailbox even when the message
+  // leaves from a borrowed (buyer/pool) mailbox, or replies land in the wrong inbox.
+  const gatewayAddress = vendorGatewayAddress({ channel: resolvedVendorChannel, from: outgoing.from });
   if (channel === DELIVERY_CHANNEL.VENDOR && !outgoing.replyTo && gatewayAddress) {
     outgoing.replyTo = gatewayAddress;
   }
 
-  const steps = deliveryPlan(channel, critical);
+  const steps = deliveryPlan(channel, critical, resolvedVendorChannel);
   if (steps.length === 0) {
     logger.warn(`No outbound mail provider configured — ${label} not sent`, { to: message.to, channel }, 'MAILER_SERVICE');
     return { sent: false, success: false, status: 'not_configured', reason: 'SMTP not configured' };
@@ -971,10 +1340,21 @@ function isBuyerUploadedVendor(vendor, context = {}, rfq = {}) {
   return false;
 }
 
+/**
+ * Build a deterministic/traceable RFC2822 Message-ID embedding the RFQ number
+ * and vendor identifier so reply threading preserves the RFQ even when a vendor
+ * changes the subject line (e.g. "Offer").
+ */
+function buildRfqInviteMessageId(rfqNumber, vendorId = 'vendor', timestamp = Date.now()) {
+  const safeRfq = String(rfqNumber || 'UNKNOWN').trim().replace(/[^A-Za-z0-9._-]/g, '-');
+  const safeVendor = String(vendorId || 'vendor').trim().replace(/[^A-Za-z0-9._-]/g, '-');
+  const safeTs = Number.isFinite(Number(timestamp)) ? Math.trunc(Number(timestamp)) : Date.now();
+  return `<rfq-${safeRfq}-v${safeVendor}-${safeTs}@procucev.com>`;
+}
+
 function buildRfqInviteEmail(to, context = {}) {
   const {
     rfq = {},
-    recipientName,
     buyerEmail,
     cc,
     freeCreditsRemaining,
@@ -983,6 +1363,7 @@ function buildRfqInviteEmail(to, context = {}) {
     vendor,
   } = context;
   const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const routing = resolveVendorInviteRouting(vendor, context, rfq);
   const buyerName = rfq.buyerAccountName ? String(rfq.buyerAccountName).trim() : null;
   const introMessage = isReminder
     ? (isBuyerVendor && buyerName
@@ -1025,7 +1406,8 @@ function buildRfqInviteEmail(to, context = {}) {
       ? `Item: ${items[0].itemName || items[0].name || MAILER_NOT_SPECIFIED}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
-  const gatewayEmail = vendorGatewayAddress();
+  const gatewayEmail = routing.replyTo || vendorGatewayAddress({ channel: routing.channel });
+  const fromEmailAddr = routing.from || vendorFromAddress({ channel: routing.channel });
   const buyerNormalized = (buyerEmail || (rfq && (rfq.buyerEmail || rfq.raisedByEmail)) || '').toLowerCase().trim();
   let inviteCc = undefined;
   if (cc) {
@@ -1033,9 +1415,49 @@ function buildRfqInviteEmail(to, context = {}) {
     inviteCc = list.length > 0 ? list.join(', ') : undefined;
   }
   const requiresPortal = items.length > 10;
+  const isInviteOnlyTemplate = !routing.replyToQuoteAllowed;
+  const rfqPortalIdentifier = encodeURIComponent(rfq.rfqNumber || rfq.id || '');
+  const directRfqPortalUrl = `${getPublicFrontendUrl()}/vendor/rfqs/${rfqPortalIdentifier}`;
+  const quotationFormUrl = `${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}`;
+
+  const submissionSectionHtml = isInviteOnlyTemplate
+    ? `
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">Portal Submission Required (Do Not Reply to This Email)</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        Please download the RFQ details and submit your bid directly through the <a href="${directRfqPortalUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a> (or open the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Quotation Form</a>). <strong>Portal submission is required for this network invitation — do not reply to this email; replies sent to this mailbox are not processed and no quotation will be created.</strong>
+      </p>
+      <p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Please use the Procucev Vendor Portal (<a href="${directRfqPortalUrl}" style="color: #0284c7;">View RFQ &amp; Submit Quote</a>) so your offer is captured accurately and compared immediately.</em></p>
+    `
+    : `
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        ${
+          requiresPortal
+            ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
+            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
+        }
+      </p>
+
+      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
+      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
+        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
+        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
+        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
+        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
+      </ul>
+
+      ${
+        requiresPortal
+          ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
+          : `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
+             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${replyFormatGuide}</div>
+             <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
+             ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}`
+      }
+    `;
 
   const inner = `
-    <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>Greetings from <strong>Procucev!</strong></p>
     <p>QUA by <strong>Procucev</strong> is a trusted AI B2B marketplace connecting genuine buyers and quality sellers across India.</p>
     <p>${introMessage}</p>
@@ -1067,32 +1489,7 @@ function buildRfqInviteEmail(to, context = {}) {
           ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / ${VENDOR_FREE_CREDITS_LIMIT} remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
           : ''
       }
-      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
-      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
-        ${
-          requiresPortal
-            ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
-            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
-        }
-      </p>
-
-      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
-      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
-        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
-        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
-        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
-        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
-        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
-      </ul>
-
-      ${
-        requiresPortal
-          ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
-          : `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
-             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${replyFormatGuide}</div>
-             <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
-             ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}`
-      }
+      ${submissionSectionHtml}
     </div>
 
     <div style="margin: 16px 0; padding: 12px 16px; background: #fdf4ff; border: 1px solid #f0abfc; border-radius: 8px; font-size: 12px; color: #701a75;">
@@ -1118,18 +1515,25 @@ function buildRfqInviteEmail(to, context = {}) {
     </p>
   `;
 
+  const resolvedVendorId = (vendor && vendor.id) || context.vendorId || 'vendor';
+  const messageId = context.messageId || (rfq && rfq.rfqNumber
+    ? buildRfqInviteMessageId(rfq.rfqNumber, resolvedVendorId)
+    : undefined);
+
   return {
-    from: vendorFromAddress(),
+    from: fromEmailAddr,
     to,
     replyTo: gatewayEmail,
     cc: inviteCc,
+    ...(messageId ? { messageId } : {}),
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', isReminder ? 'RFQ Reminder' : 'New Sourcing Enquiry', inner),
   };
 }
 
-async function sendRfqInviteEmail(to, context) {
-  return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
+async function sendRfqInviteEmail(to, context = {}) {
+  const routing = resolveVendorInviteRouting(context.vendor, context, context.rfq);
+  return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email', { vendorChannel: routing.channel });
 }
 
 // ── RFQ minor category shortfall → Procucev team ─────────────────────────────
@@ -1227,9 +1631,9 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: vendorFromAddress(),
+    from: vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     to,
-    replyTo: vendorGatewayAddress(),
+    replyTo: vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     cc: resolvedCc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
@@ -1237,7 +1641,11 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteAcknowledgementEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildQuoteAcknowledgementEmail(toOrParams, maybeContext)), 'quote acknowledgement email');
+  return deliverVendor(
+    asAutoReply(buildQuoteAcknowledgementEmail(toOrParams, maybeContext)),
+    'quote acknowledgement email',
+    { vendorChannel: VENDOR_MAILBOX_CHANNELS.DIRECT }
+  );
 }
 
 // ── Vendor quote failure notification → vendor (with buyer & support CC) ─────
@@ -1263,9 +1671,9 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: vendorFromAddress(),
+    from: vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     to,
-    replyTo: vendorGatewayAddress(),
+    replyTo: vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Notice', inner),
@@ -1273,7 +1681,11 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteFailureEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildQuoteFailureEmail(toOrParams, maybeContext)), 'quote failure notification email');
+  return deliverVendor(
+    asAutoReply(buildQuoteFailureEmail(toOrParams, maybeContext)),
+    'quote failure notification email',
+    { vendorChannel: VENDOR_MAILBOX_CHANNELS.DIRECT }
+  );
 }
 
 // ── Vendor credits exhausted notification → vendor ───────────────────────────
@@ -1366,9 +1778,9 @@ function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: vendorFromAddress(),
+    from: vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     to,
-    replyTo: vendorGatewayAddress(),
+    replyTo: vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Free Quotation Credits Exhausted', inner),
@@ -1376,7 +1788,11 @@ function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
 }
 
 async function sendVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildVendorCreditsExhaustedEmail(toOrParams, maybeContext)), 'vendor credits exhausted email');
+  return deliverVendor(
+    asAutoReply(buildVendorCreditsExhaustedEmail(toOrParams, maybeContext)),
+    'vendor credits exhausted email',
+    { vendorChannel: VENDOR_MAILBOX_CHANNELS.DIRECT }
+  );
 }
 
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
@@ -1798,58 +2214,6 @@ async function sendRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) 
   return deliver(buildRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext), 'RFQ auto-closure acknowledgement email');
 }
 
-// ── RFQ Closed Notice → invited vendors ──────────────────────────────────────
-
-function buildRfqClosedVendorEmail(toOrParams, maybeContext) {
-  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
-  const { rfq = {}, recipientName, vendor } = context;
-  const rfqNumber = requireMailText(rfq.rfqNumber || rfq.id, 'rfq.rfqNumber', 'RFQ closed vendor notice');
-  const rfqTitle = rfq.title ? String(rfq.title) : MAILER_NOT_SPECIFIED;
-  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
-  const buyerName = isBuyerVendor && rfq.buyerAccountName ? String(rfq.buyerAccountName).trim() : null;
-  const portalUrl = `${getPublicFrontendUrl()}/vendor/opportunity-feed`;
-  const subject = `RFQ Closed: ${rfqNumber}${rfq.title ? ` – ${rfq.title}` : ''}`;
-
-  const closedByLabel = buyerName ? `<strong>${escapeHtml(buyerName)}</strong>` : 'the buyer';
-  const greeting = recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,';
-
-  const inner = `
-    <p>${greeting}</p>
-    <p>Please note that RFQ <strong>#${escapeHtml(rfqNumber)}</strong> (<em>${escapeHtml(rfqTitle)}</em>) has been closed by ${closedByLabel}.</p>
-
-    <div style="background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 14px; border-radius: 6px; margin: 16px 0;">
-      <strong>RFQ Bidding Concluded</strong><br/>
-      This requisition is permanently closed and can no longer be reopened. No further quotations or revisions can be submitted for this RFQ.
-    </div>
-
-    <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 14px; margin: 16px 0;">
-      <table style="width: 100%; border-collapse: collapse;">
-        ${row('RFQ Number', escapeHtml(rfqNumber))}
-        ${row('Requirement', escapeHtml(rfqTitle))}
-        ${row('Category', rfq.category ? escapeHtml(rfq.category) : '-')}
-        ${row('Delivery Location', rfq.deliveryLocation ? escapeHtml(rfq.deliveryLocation) : '-')}
-        ${row('Status', 'Closed (Bidding Concluded)')}
-      </table>
-    </div>
-
-    <div style="text-align: center; margin: 24px 0;">
-      <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">View Enquiries in Vendor Portal</a>
-    </div>
-    <p style="font-size: 12px; color: #64748b; text-align: center;">Thank you for participating on Procucev Enterprise.</p>
-  `;
-
-  return {
-    from: vendorFromAddress(),
-    to,
-    subject,
-    html: wrapEmail('PROCUCEV ENTERPRISE', 'RFQ Closed Notice', inner),
-  };
-}
-
-async function sendRfqClosedVendorEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildRfqClosedVendorEmail(toOrParams, maybeContext)), 'RFQ closed vendor notice email');
-}
-
 // ── Complex RFQ (>10 items) Portal Redirection Email → vendor ───────────────
 
 function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
@@ -1895,9 +2259,12 @@ function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
     <p style="font-size: 12px; color: #64748b; text-align: center;">If you have any questions, please reply directly or access the clarification desk on the portal.</p>
   `;
 
+  const directFrom = vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT });
+  const directReplyTo = vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT });
   return {
-    from: fromAddress(),
+    from: directFrom || fromAddress(),
     to,
+    ...(directReplyTo ? { replyTo: directReplyTo } : {}),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Portal Bidding Required', inner),
@@ -1905,7 +2272,13 @@ function buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
 }
 
 async function sendComplexRfqPortalRedirectEmail(toOrParams, maybeContext) {
-  return deliver(asAutoReply(buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext)), 'Complex RFQ portal redirect email');
+  const message = asAutoReply(buildComplexRfqPortalRedirectEmail(toOrParams, maybeContext));
+  if (vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT })) {
+    return deliverVendor(message, 'Complex RFQ portal redirect email', {
+      vendorChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+    });
+  }
+  return deliver(message, 'Complex RFQ portal redirect email');
 }
 
 // ── Vendor Issue / Query reply notification → vendor (with buyer CC) ─────────
@@ -1944,9 +2317,9 @@ function buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: vendorFromAddress(),
+    from: vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     to,
-    replyTo: vendorGatewayAddress(),
+    replyTo: vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.DIRECT }),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Clarification Query Logged', inner),
@@ -1954,7 +2327,11 @@ function buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
 }
 
 async function sendVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext)), 'vendor issue acknowledgment email');
+  return deliverVendor(
+    asAutoReply(buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext)),
+    'vendor issue acknowledgment email',
+    { vendorChannel: VENDOR_MAILBOX_CHANNELS.DIRECT }
+  );
 }
 
 // ── Vendor Category Mismatch: request update & exclude from shortlist ────────
@@ -1975,6 +2352,7 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
   } = context;
 
   const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const routing = resolveVendorInviteRouting(vendor, context, rfq);
   const displayBuyer = isBuyerVendor && buyerAccountName;
 
   const targetRfqNumber = requireMailText(rfqNumber || rfq.rfqNumber, 'rfqNumber', 'Category mismatch notice');
@@ -2016,9 +2394,9 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: vendorFromAddress(),
+    from: routing.from || vendorFromAddress({ channel: routing.channel }),
     to,
-    replyTo: vendorGatewayAddress(),
+    replyTo: routing.replyTo || vendorGatewayAddress({ channel: routing.channel }),
     cc: cc || (buyerEmail ? buyerEmail : undefined),
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Update Required', inner),
@@ -2026,7 +2404,71 @@ function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
 }
 
 async function sendVendorCategoryMismatchEmail(toOrParams, maybeContext) {
-  return deliverVendor(asAutoReply(buildVendorCategoryMismatchEmail(toOrParams, maybeContext)), 'vendor category mismatch notification email');
+  const { context } = normalizeToAndContext(toOrParams, maybeContext);
+  const routing = resolveVendorInviteRouting(context.vendor, context, context.rfq);
+  return deliverVendor(
+    asAutoReply(buildVendorCategoryMismatchEmail(toOrParams, maybeContext)),
+    'vendor category mismatch notification email',
+    { vendorChannel: routing.channel }
+  );
+}
+
+/**
+ * Portal-redirect auto-reply dispatched when a vendor replies to the invite-only
+ * network mailbox (`VENDOR_INVITE_EMAIL_ADDRESS`). Does NOT parse quotes or create bids.
+ */
+function buildVendorInvitePortalRedirectEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const {
+    rfq = {},
+    rfqNumber,
+    rfqId,
+    vendorName,
+    recipientName,
+    isRegisteredVendor = false,
+    portalUrl,
+    registerUrl,
+    cc,
+  } = context;
+  const targetRfqNumber = requireMailText(
+    rfqNumber || rfq.rfqNumber || rfqId || rfq.id,
+    'rfqNumber',
+    'Vendor invite portal redirect'
+  );
+  const inviteFrom = vendorFromAddress({ channel: VENDOR_MAILBOX_CHANNELS.INVITE }) || fromAddress();
+  const inviteReplyTo = vendorGatewayAddress({ channel: VENDOR_MAILBOX_CHANNELS.INVITE });
+  const encodedId = encodeURIComponent(targetRfqNumber);
+  const baseUrl = getPublicFrontendUrl();
+  const resolvedCtaUrl = isRegisteredVendor
+    ? (portalUrl || `${baseUrl}/vendor/rfqs/${encodedId}`)
+    : (registerUrl || `${baseUrl}/vendor/register?rfq=${encodedId}`);
+  const built = buildVendorInvitePortalRedirectTemplate({
+    rfq_id: rfqId || rfq.id || targetRfqNumber,
+    rfq_number: targetRfqNumber,
+    rfq_title: rfq.title || null,
+    vendor_name: recipientName || vendorName || null,
+    is_registered_vendor: Boolean(isRegisteredVendor),
+    cta_url: resolvedCtaUrl,
+    invite_mailbox: bareVendorAddress(inviteFrom) || inviteReplyTo || null,
+  });
+  return {
+    from: inviteFrom,
+    to,
+    ...(inviteReplyTo ? { replyTo: inviteReplyTo } : {}),
+    ...(cc ? { cc } : {}),
+    subject: built.subject,
+    text: built.text,
+    html: built.html,
+    ctaUrl: built.ctaUrl,
+  };
+}
+
+async function sendVendorInvitePortalRedirectEmail(toOrParams, maybeContext) {
+  return deliverVendor(
+    asAutoReply(buildVendorInvitePortalRedirectEmail(toOrParams, maybeContext)),
+    'vendor invite portal redirect email',
+    { vendorChannel: VENDOR_MAILBOX_CHANNELS.INVITE }
+  );
 }
 
 /**
@@ -2228,7 +2670,39 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
 }
 
 /** Template C — a plain onboarding notice, with no category claim either way. */
-function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, vendorCode, tempPassword, contactPhone }) {
+function buildVendorOnboardingEmail({
+  to,
+  recipientName,
+  buyerOrganizationName,
+  vendorCode,
+  tempPassword,
+  contactPhone,
+  isCmCreated = false,
+  mailboxChannel = null,
+}) {
+  if (isCmCreated) {
+    const channel = mailboxChannel || VENDOR_MAILBOX_CHANNELS.DIRECT;
+    const cmSender = vendorFromAddress({ channel }) || fromAddress();
+    const cmReplyTo = vendorGatewayAddress({ channel }) || undefined;
+    const built = buildCmVendorOnboardingTemplate({
+      to,
+      recipient_name: recipientName,
+      buyer_organization_name: buyerOrganizationName,
+      vendor_code: vendorCode,
+      temp_password: tempPassword,
+      contact_phone: contactPhone,
+      login_url: vendorSignInUrl(),
+    });
+    return {
+      from: cmSender,
+      to,
+      ...(cmReplyTo ? { replyTo: cmReplyTo } : {}),
+      subject: built.subject,
+      text: built.text,
+      html: built.html,
+    };
+  }
+
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
   const signInUrl = escapeHtml(vendorSignInUrl());
 
@@ -2290,16 +2764,23 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
     </div>
   `;
 
+  const resolvedFrom = mailboxChannel
+    ? (vendorFromAddress({ channel: mailboxChannel }) || fromAddress())
+    : fromAddress();
+  const resolvedReplyTo = mailboxChannel
+    ? (vendorGatewayAddress({ channel: mailboxChannel }) || undefined)
+    : undefined;
   return {
-    from: fromAddress(),
+    from: resolvedFrom,
     to,
+    ...(resolvedReplyTo ? { replyTo: resolvedReplyTo } : {}),
     subject: `[Action Required] Welcome to Procucev - Your Account Credentials from ${buyer}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Supplier Onboarding & Login Credentials', inner),
   };
 }
 
 /** Credential-free invitation for a vendor identity created during bulk import. */
-function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganizationName, vendorCode }) {
+function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganizationName, vendorCode, isCmCreated = false, mailboxChannel = null }) {
   const buyer = escapeHtml(buyerOrganizationName || 'Procucev Enterprise');
   const signInUrl = escapeHtml(vendorSignInUrl());
   const safeName = recipientName ? escapeHtml(recipientName) : '';
@@ -2315,9 +2796,13 @@ function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganiza
     <p style="font-size: 13px; color: #64748b;">Never share your verification code with anyone. If you did not expect this invitation, contact support@procucev.ai.</p>
   `;
 
+  const resolvedChannel = mailboxChannel || (isCmCreated ? VENDOR_MAILBOX_CHANNELS.DIRECT : null);
+  const sender = resolvedChannel ? (vendorFromAddress({ channel: resolvedChannel }) || fromAddress()) : fromAddress();
+  const replyTo = resolvedChannel ? (vendorGatewayAddress({ channel: resolvedChannel }) || undefined) : undefined;
   return {
-    from: fromAddress(),
+    from: sender,
     to,
+    ...(replyTo ? { replyTo } : {}),
     subject: 'Your Procucev vendor account is ready',
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor sign-in invitation', inner),
   };
@@ -2640,8 +3125,8 @@ async function sendVendorEvaluationRequestEmail(params) {
  * service records that reason against the recipient, which is what makes an
  * unconfigured server show up as retryable failures instead of silent success.
  */
-async function sendVendorIngestionEmail(message, template) {
-  return deliverVendor(message, `vendor ingestion ${template} email`);
+async function sendVendorIngestionEmail(message, template, options = {}) {
+  return deliverVendor(message, `vendor ingestion ${template} email`, options);
 }
 
 /**
@@ -2942,6 +3427,7 @@ module.exports = {
   deliverVendor,
   sendOtpEmail,
   sendRfqInviteEmail,
+  buildRfqInviteMessageId,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
   buildRfqMinorShortfallEmail,
@@ -2983,8 +3469,6 @@ module.exports = {
   sendRfqFinalComparisonEmail,
   buildRfqAutoClosureAcknowledgementEmail,
   sendRfqAutoClosureAcknowledgementEmail,
-  buildRfqClosedVendorEmail,
-  sendRfqClosedVendorEmail,
   buildComplexRfqPortalRedirectEmail,
   sendComplexRfqPortalRedirectEmail,
   buildVendorIssueAcknowledgementEmail,
@@ -2999,6 +3483,11 @@ module.exports = {
   isGmailApiConfigured,
   isVendorGmailApiConfigured,
   getVendorGmailOAuthClient,
+  isVendorInviteGmailApiConfigured,
+  getVendorInviteGmailOAuthClient,
+  resolveVendorInviteRouting,
+  buildVendorInvitePortalRedirectEmail,
+  sendVendorInvitePortalRedirectEmail,
   isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
   getGmailProviderKey,

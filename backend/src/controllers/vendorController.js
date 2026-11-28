@@ -957,6 +957,8 @@ async function createVendor(req, res, next) {
       buyerId = null;
       addedByBuyerCompany = null;
       body.source = 'procucev_network';
+      body.createdByRole = 'category_manager';
+      body.isCmCreated = true;
       clearDummyPanFields(body);
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
@@ -1045,7 +1047,13 @@ async function createVendor(req, res, next) {
     // provisioning outcome — success or failure — reflected in `created`
     // before the response is sent.
     const onboarding = created.email
-      ? await storeService.provisionVendorOnboarding(created, req.user && req.user.email)
+      ? await storeService.provisionVendorOnboarding(
+        created,
+        req.user && req.user.email,
+        req.user.role === 'category_manager'
+          ? { isCmCreated: true, mailboxChannel: 'direct' }
+          : undefined
+      )
       : null;
     const persistedVendor = storeService.getVendorById(created.id, 'all') || created;
     const vendor = withoutTemporaryPassword(persistedVendor);
@@ -2570,7 +2578,11 @@ async function bulkImportVendors(req, res, next) {
         source: 'buyer_excel',
       };
     } else {
-      buyerAttribution = { source: 'category_manager_upload' };
+      buyerAttribution = {
+        source: 'category_manager_upload',
+        createdByRole: req.user.role || 'category_manager',
+        isCmCreated: true,
+      };
     }
 
     const rows = Array.isArray(req.body.vendors) ? req.body.vendors : null;

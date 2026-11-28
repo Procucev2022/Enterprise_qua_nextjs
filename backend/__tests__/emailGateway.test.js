@@ -3293,7 +3293,7 @@ Hello team, sending catalog.
       expect(result2.totalIngested).toBe(1);
     });
 
-    test('inbound multi-item RFQ sent to vendor inbox (srinu20252026@gmail.com) by registered buyer creates RFQ and preserves all line items', async () => {
+    test('inbound multi-item RFQ sent to vendor inbox (srinu20252026@gmail.com) by registered buyer is blocked and creates no RFQ', async () => {
       const registeredBuyer = {
         id: 'buyer-dual-1',
         corporateEmail: 'buyer.procure@enterprise.com',
@@ -3303,7 +3303,7 @@ Hello team, sending catalog.
         pincode: '500081',
       };
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(registeredBuyer);
-      const ackSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
 
       const multiItemEml = `From: buyer.procure@enterprise.com
 To: srinu20252026@gmail.com
@@ -3320,37 +3320,10 @@ Delivery needed in Hyderabad.
 `;
 
       const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
-
-      // Mock gemini extraction returning 3 distinct line items
-      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
-        status: geminiService.EXTRACTION_STATUS.SUCCESS,
-        documentTitle: 'Electrical & Mechanical Consumables',
-        category: 'Electrical & Electronics',
-        lineItems: [
-          { itemDescription: 'Industrial Motor 15HP', quantity: 5, uom: 'Nos', specifications: 'High torque specs', targetDate: '2026-10-01' },
-          { itemDescription: 'Ball Bearings 6205', quantity: 100, uom: 'Nos', specifications: 'SKF grade', targetDate: '2026-10-01' },
-          { itemDescription: 'V-Belts B-52', quantity: 20, uom: 'Nos', specifications: 'Heavy duty', targetDate: '2026-10-01' },
-        ],
-      });
-
       const result = await emailGatewayService.processMessage(Buffer.from(multiItemEml, 'utf8'), vendorConfig);
 
-      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
-      expect(result.rfq).toBeDefined();
-      expect(result.rfq.status).toBe('Quotes Pending');
-      expect(result.rfq.extractedEntities).toHaveLength(3);
-      expect(result.rfq.extractedEntities[0].itemName).toBe('Industrial Motor 15HP');
-      expect(result.rfq.extractedEntities[0].quantity).toBe(5);
-      expect(result.rfq.extractedEntities[1].itemName).toBe('Ball Bearings 6205');
-      expect(result.rfq.extractedEntities[1].quantity).toBe(100);
-      expect(result.rfq.extractedEntities[2].itemName).toBe('V-Belts B-52');
-      expect(result.rfq.extractedEntities[2].quantity).toBe(20);
-      expect(ackSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'buyer.procure@enterprise.com',
-          rfqNumber: result.rfq.rfqNumber,
-        })
-      );
+      expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX);
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
 
     test('unregistered buyer sending RFQ to vendor inbox (srinu20252026@gmail.com) is blocked, sends notification, and creates no RFQ or buyer', async () => {
@@ -3385,11 +3358,10 @@ Need quotation for 2 units Hydraulic Pump.
       expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
 
-    test('unregistered buyer sending RFQ to vendor inbox auto-registers buyer and does not send unauthorized notification when auto-register is enabled', async () => {
-      const unauthSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValue(true);
-      jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-auto-1', rfqNumber: 'RFQ-AUTO-1' });
+    test('unregistered buyer sending RFQ to vendor inbox is always blocked and never auto-registers even if EMAIL_GATEWAY_AUTO_REGISTER is true', async () => {
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
+      const getOrCreateSpy = jest.spyOn(emailGatewayService, 'getOrCreateBuyerAccount');
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
-      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
 
       const unauthEml = `From: new.buyer@enterprise.org
 To: srinu20252026@gmail.com
@@ -3401,20 +3373,17 @@ Content-Type: text/plain
 Need quotation for 5 units Water Pump.
 `;
 
-      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
-      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
-        status: geminiService.EXTRACTION_STATUS.SUCCESS,
-        documentTitle: 'Industrial Water Pumps',
-        category: 'Machinery',
-        lineItems: [
-          { itemDescription: 'Water Pump', quantity: 5, uom: 'Nos' },
-        ],
+      const vendorConfig = emailGatewayService.resolveVendorConfig({
+        ...VENDOR_ENV,
+        EMAIL_GATEWAY_AUTO_REGISTER: 'true',
       });
+      expect(vendorConfig.autoRegisterUnregisteredBuyers).toBe(false);
 
       const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
 
-      expect(unauthSpy).not.toHaveBeenCalled();
-      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+      expect(getOrCreateSpy).not.toHaveBeenCalled();
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
 
     test('insufficient extraction or zero line items logs failure and does not create RFQ', async () => {
@@ -3934,7 +3903,7 @@ describe('emailGatewayService dual-registered buyer and vendor handling', () => 
     });
 
     const emlContent = `From: ${dualEmail}
-To: client@procucev.com
+To: rfq@procucev.com
 Subject: Quotation Request for Consumables
 Message-ID: <dual-msg-1@procucev.com>
 Date: Fri, 23 Oct 2026 15:17:43 +0530

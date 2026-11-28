@@ -237,6 +237,30 @@ function headerText(headers, name) {
   return String(value);
 }
 
+/** Extract normalized email addresses from single or repeated header entries. */
+function extractHeaderAddresses(headers, name) {
+  if (!headers || typeof headers.get !== 'function') return [];
+  const raw = headers.get(name);
+  if (!raw) return [];
+  const items = Array.isArray(raw) ? raw : [raw];
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const text = typeof item === 'string'
+      ? item
+      : (item && typeof item === 'object' ? (item.text || item.address || (Array.isArray(item.value) ? item.value.map((v) => v && v.address).filter(Boolean).join(',') : '')) : String(item || ''));
+    for (const part of String(text || '').split(/[,;]+/)) {
+      const bracketMatch = part.match(/<\s*([^<>]+)\s*>/);
+      const addr = (bracketMatch ? bracketMatch[1] : part).trim().toLowerCase();
+      if (addr && addr.includes('@') && !seen.has(addr)) {
+        seen.add(addr);
+        out.push(addr);
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Why a message was machine-generated, or null for mail a person sent.
  *
@@ -378,6 +402,8 @@ async function parseEmailMessage(rawBuffer) {
     ? parsed.subject
     : (headerText(parsed && parsed.headers, 'subject') || '');
   const subject = decodeAndNormalizeEmailSubject(rawSubject);
+  const rawBodyText = resolveBodyText(parsed);
+  const bodyHtml = typeof parsed.html === 'string' ? parsed.html : '';
 
   return {
     messageId: String(parsed.messageId || '').trim(),
@@ -386,10 +412,14 @@ async function parseEmailMessage(rawBuffer) {
     fromName: firstAddressName(parsed.from, fromAddress),
     toAddress: firstAddress(parsed.to),
     toAddresses: extractCcAddresses(parsed.to),
+    deliveredTo: extractHeaderAddresses(parsed.headers, 'delivered-to'),
+    originalTo: extractHeaderAddresses(parsed.headers, 'x-original-to'),
     cc: extractCcAddresses(parsed.cc),
     ccAddresses: extractCcAddresses(parsed.cc),
     sentAt: parsed.date instanceof Date ? parsed.date.toISOString() : null,
-    bodyText: stripQuotedReplies(resolveBodyText(parsed)),
+    bodyText: stripQuotedReplies(rawBodyText),
+    rawBodyText,
+    bodyHtml,
     attachments,
     // Threading headers: a vendor reply to an RFQ invite names the RFQ here
     // even when the vendor rewrote the subject.
@@ -480,8 +510,34 @@ async function prepareEmailForExtraction({ fileName, content }) {
     !!inlineAttachment ||
     message.attachments.some((attachment) => attachment.role === 'text');
 
+  const buildPreparedMessage = () => ({
+    messageId: message.messageId,
+    subject: message.subject,
+    fromAddress: message.fromAddress,
+    fromName: message.fromName,
+    toAddress: message.toAddress,
+    toAddresses: message.toAddresses || (message.toAddress ? [message.toAddress] : []),
+    deliveredTo: message.deliveredTo || [],
+    originalTo: message.originalTo || [],
+    cc: message.cc || [],
+    sentAt: message.sentAt,
+    bodyText: message.bodyText || '',
+    rawBodyText: message.rawBodyText || message.bodyText || '',
+    bodyHtml: message.bodyHtml || '',
+    attachments: message.attachments || [],
+    attachmentNames: message.attachments.map((attachment) => attachment.fileName),
+    inReplyTo: message.inReplyTo || '',
+    references: message.references || '',
+    automatedReason: message.automatedReason || null,
+  });
+
   if (!hasExtractableContent) {
-    return { status: EMAIL_INGESTION_STATUS.NO_CONTENT, unreadableAttachments };
+    const hasDocumentAttachments = message.attachments.some((attachment) => attachment && attachment.role !== 'signature');
+    return {
+      status: EMAIL_INGESTION_STATUS.NO_CONTENT,
+      unreadableAttachments,
+      ...(hasDocumentAttachments ? { message: buildPreparedMessage() } : {}),
+    };
   }
 
   logger.info(
@@ -498,21 +554,7 @@ async function prepareEmailForExtraction({ fileName, content }) {
 
   return {
     status: EMAIL_INGESTION_STATUS.READY,
-    message: {
-      messageId: message.messageId,
-      subject: message.subject,
-      fromAddress: message.fromAddress,
-      fromName: message.fromName,
-      toAddress: message.toAddress,
-      cc: message.cc || [],
-      sentAt: message.sentAt,
-      bodyText: message.bodyText || '',
-      attachments: message.attachments || [],
-      attachmentNames: message.attachments.map((attachment) => attachment.fileName),
-      inReplyTo: message.inReplyTo || '',
-      references: message.references || '',
-      automatedReason: message.automatedReason || null,
-    },
+    message: buildPreparedMessage(),
     extractionInput: {
       fileName,
       documentText: documentText || undefined,
@@ -541,6 +583,7 @@ const emailIngestion = {
   parseEmailMessage,
   prepareEmailForExtraction,
   extractCcAddresses,
+  extractHeaderAddresses,
   detectAutomatedMessage,
   decodeQuotedPrintable,
   decodeBase64,

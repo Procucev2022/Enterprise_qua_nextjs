@@ -3453,5 +3453,80 @@ describe('additional domainQueries branch coverage', () => {
       const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Mechanical'], 5, { pincode: '560001' });
       expect(majorRows.map((v) => v.id)).toEqual(['v-pub-act']);
     });
+
+    test('V0 vendor invite tracking and atomic buyer quotes dispatch SQL helpers cover storage and edge branches', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      await expect(domainQueries.recordRfqVendorInviteInDB({ rfqNumber: 'RFQ-1', vendorEmail: 'v@test.in' })).resolves.toBeNull();
+      await expect(domainQueries.findRfqVendorInviteByMessageIdsFromDB(['<m@x>'])).resolves.toBeNull();
+      await expect(domainQueries.findOpenVendorInvitesWithinWindowFromDB({ vendorEmail: 'v@test.in', cutoffIso: '2026-01-01T00:00:00Z' })).resolves.toEqual([]);
+      await expect(domainQueries.findRfqVendorInvitesByRfqNumberFromDB('RFQ-1')).resolves.toEqual([]);
+      await expect(domainQueries.claimRfqBuyerQuotesDispatchInDB('RFQ-1')).resolves.toBeNull();
+      await expect(domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB('RFQ-1')).resolves.toBe(false);
+      await expect(domainQueries.listDueV0RfqsForQuotesDispatchFromDB()).resolves.toEqual([]);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const query = jest.fn().mockResolvedValue({ rows: [] });
+      pool.pool = { query };
+
+      // Guard / empty parameter checks with storage enabled
+      await expect(domainQueries.recordRfqVendorInviteInDB({ rfqNumber: ' ', vendorEmail: ' ' })).resolves.toBeNull();
+      await expect(domainQueries.findRfqVendorInviteByMessageIdsFromDB([' ', ''])).resolves.toBeNull();
+      await expect(domainQueries.findOpenVendorInvitesWithinWindowFromDB({ cutoffIso: '2026-01-01T00:00:00Z' })).resolves.toEqual([]);
+      await expect(domainQueries.findRfqVendorInvitesByRfqNumberFromDB('   ')).resolves.toEqual([]);
+      await expect(domainQueries.claimRfqBuyerQuotesDispatchInDB('')).resolves.toBeNull();
+      await expect(domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB('')).resolves.toBe(false);
+
+      // recordRfqVendorInviteInDB without quotesDispatchDueAt
+      const inv1 = await domainQueries.recordRfqVendorInviteInDB({
+        rfqId: 'rfq-1',
+        rfqNumber: 'RFQ262511000001',
+        vendorId: 'v-1',
+        vendorEmail: 'Vendor@Supplier.IN',
+        inviteMessageId: '<rfq-RFQ262511000001-vv-1-100@procucev.com>',
+      });
+      expect(inv1).toMatchObject({ vendorEmail: 'vendor@supplier.in', quotesDispatchDueAt: null });
+      expect(query).toHaveBeenCalledTimes(1);
+
+      // recordRfqVendorInviteInDB with quotesDispatchDueAt updates rfqs and invalidates cache
+      const invalidateSpy = jest.spyOn(pool.queryCache, 'invalidate');
+      const inv2 = await domainQueries.recordRfqVendorInviteInDB({
+        rfqNumber: 'RFQ262511000001',
+        vendorEmail: 'v@supplier.in',
+        quotesDispatchDueAt: '2026-11-27T00:00:00.000Z',
+      });
+      expect(inv2.quotesDispatchDueAt).toBe('2026-11-27T00:00:00.000Z');
+      expect(query).toHaveBeenCalledTimes(3);
+      expect(invalidateSpy).toHaveBeenCalledWith('rfqs');
+
+      // findRfqVendorInviteByMessageIdsFromDB returns row and null
+      query.mockResolvedValueOnce({ rows: [{ rfq_number: 'RFQ262511000001' }] });
+      await expect(domainQueries.findRfqVendorInviteByMessageIdsFromDB(['<rfq-1@procucev.com>', '<rfq-1@procucev.com>'])).resolves.toEqual({ rfq_number: 'RFQ262511000001' });
+      query.mockResolvedValueOnce({ rows: [] });
+      await expect(domainQueries.findRfqVendorInviteByMessageIdsFromDB(['<missing@procucev.com>'])).resolves.toBeNull();
+
+      // findOpenVendorInvitesWithinWindowFromDB + findRfqVendorInvitesByRfqNumberFromDB
+      query.mockResolvedValueOnce({ rows: [{ rfq_number: 'RFQ262511000001' }] });
+      await expect(domainQueries.findOpenVendorInvitesWithinWindowFromDB({ vendorId: 'v-1', cutoffIso: '2026-11-23T00:00:00Z' })).resolves.toEqual([{ rfq_number: 'RFQ262511000001' }]);
+      query.mockResolvedValueOnce({ rows: [{ vendor_email: 'v@supplier.in' }] });
+      await expect(domainQueries.findRfqVendorInvitesByRfqNumberFromDB('RFQ262511000001')).resolves.toEqual([{ vendor_email: 'v@supplier.in' }]);
+
+      // claimRfqBuyerQuotesDispatchInDB hit & miss + releaseRfqBuyerQuotesDispatchClaimInDB
+      query.mockResolvedValueOnce({ rows: [{ raw: JSON.stringify({ rfqNumber: 'RFQ262511000001', buyerQuotesSentAt: '2026-11-25T10:00:00Z' }) }] });
+      await expect(domainQueries.claimRfqBuyerQuotesDispatchInDB('RFQ262511000001', '2026-11-25T10:00:00Z')).resolves.toMatchObject({ rfqNumber: 'RFQ262511000001' });
+      query.mockResolvedValueOnce({ rows: [] });
+      await expect(domainQueries.claimRfqBuyerQuotesDispatchInDB('RFQ262511000001')).resolves.toBeNull();
+
+      query.mockResolvedValueOnce({ rows: [{ rfq_number: 'RFQ262511000001' }] });
+      await expect(domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB('RFQ262511000001')).resolves.toBe(true);
+      query.mockResolvedValueOnce({ rows: [] });
+      await expect(domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB('RFQ262511000001')).resolves.toBe(false);
+
+      // listDueV0RfqsForQuotesDispatchFromDB maps raw rows & clamps limit
+      query.mockResolvedValueOnce({ rows: [{ raw: { rfqNumber: 'RFQ262511000001', sourcingMode: 'mode_0' } }] });
+      await expect(domainQueries.listDueV0RfqsForQuotesDispatchFromDB('2026-11-25T12:00:00Z', 999)).resolves.toEqual([
+        { rfqNumber: 'RFQ262511000001', sourcingMode: 'mode_0' },
+      ]);
+      expect(query.mock.calls[query.mock.calls.length - 1][1][1]).toBe(200);
+    });
   });
 });

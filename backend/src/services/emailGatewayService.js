@@ -28,6 +28,8 @@ const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
+const quoteAttachmentService = require('./quoteAttachmentService');
+const quoteDocumentExtractor = require('./quoteDocumentExtractor');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
 const mailTransport = require('./mailTransport');
@@ -42,6 +44,11 @@ const {
   EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
+  VENDOR_MAILBOX_CHANNELS,
+  STRICT_BUYER_RFQ_MAILBOX,
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  NON_BUYER_MAILBOX_BLOCKLIST,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
@@ -57,6 +64,7 @@ const {
   EMAIL_REGEX,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   PLACEHOLDER_MOBILE_NUMBER,
+  resolveAttachmentContentType,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -120,8 +128,23 @@ const runtime = {
   ingestedThisRun: 0,
 };
 
-/** Live state for the dedicated vendor quotation mailbox watcher. */
+/** Live state for the dedicated vendor quotation (direct / GMT RFQ) mailbox watcher. */
 const vendorRuntime = {
+  pollTimer: null,
+  isPolling: false,
+  pollStartedAt: 0,
+  watchingSince: new Date().toISOString(),
+  lastPollAt: null,
+  lastPollDurationMs: null,
+  lastError: null,
+  recentErrors: [],
+  lastConnectedAt: null,
+  consideredThisRun: 0,
+  ingestedThisRun: 0,
+};
+
+/** Live state for the network invite-only vendor mailbox watcher. */
+const vendorInviteRuntime = {
   pollTimer: null,
   isPolling: false,
   pollStartedAt: 0,
@@ -278,25 +301,31 @@ function resolveVendorConfig(env = process.env) {
 
   return {
     enabled: String(
-      env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
-        ? env.VENDOR_EMAIL_GATEWAY_ENABLED
-        : env.EMAIL_GATEWAY_ENABLED || 'true'
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED !== undefined
+        ? env.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED
+        : (env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
+          ? env.VENDOR_EMAIL_GATEWAY_ENABLED
+          : env.EMAIL_GATEWAY_ENABLED || 'true')
     ).toLowerCase() === 'true',
     // IMAP support was removed — see resolveConfig()'s comment. The vendor
     // mailbox is read exclusively via the vendor Gmail REST API identity
-    // (VENDOR_GMAIL_* in mailerService).
+    // (VENDOR_DIRECT_RFQ_GMAIL_* / VENDOR_GMAIL_* in mailerService).
     user: (
+      env.VENDOR_DIRECT_RFQ_GATEWAY_USER ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
+      env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
       ''
     ).trim(),
     address: (
+      env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
       ''
     ).trim(),
-    mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    mailbox: (env.VENDOR_DIRECT_RFQ_GATEWAY_MAILBOX || env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
       Number(
+        env.VENDOR_DIRECT_RFQ_GATEWAY_POLL_MS ||
         env.VENDOR_EMAIL_GATEWAY_POLL_MS ||
         env.EMAIL_GATEWAY_POLL_MS ||
         EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS
@@ -305,35 +334,140 @@ function resolveVendorConfig(env = process.env) {
     ),
     maxPerPoll: Math.max(
       Number(
+        env.VENDOR_DIRECT_RFQ_GATEWAY_MAX_PER_POLL ||
         env.VENDOR_EMAIL_GATEWAY_MAX_PER_POLL ||
         env.EMAIL_GATEWAY_MAX_PER_POLL ||
         EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL
       ),
       1
     ),
-    allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
-    allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
-    autoRegisterUnregisteredBuyers: String(
-      env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER !== undefined
-        ? env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER
-        : env.EMAIL_GATEWAY_AUTO_REGISTER || 'true'
-    ).toLowerCase() !== 'false',
+    allowedSenders: splitList(
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ALLOWED_SENDERS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS ||
+      env.EMAIL_GATEWAY_ALLOWED_SENDERS
+    ),
+    allowedDomains: splitList(
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ALLOWED_DOMAINS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS ||
+      env.EMAIL_GATEWAY_ALLOWED_DOMAINS
+    ),
+    // Hole 2 fix: vendor mailbox must NEVER inherit EMAIL_GATEWAY_AUTO_REGISTER or
+    // auto-register unregistered senders as buyers.
+    autoRegisterUnregisteredBuyers: false,
     isVendorMailbox: true,
-    labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
-    labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
+    mailboxChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+    isInviteOnlyMailbox: false,
+    labelProcessed: (
+      env.VENDOR_DIRECT_RFQ_GMAIL_LABEL_PROCESSED ||
+      env.VENDOR_GMAIL_LABEL_PROCESSED ||
+      env.GMAIL_LABEL_PROCESSED ||
+      EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED
+    ).trim(),
+    labelError: (
+      env.VENDOR_DIRECT_RFQ_GMAIL_LABEL_ERROR ||
+      env.VENDOR_GMAIL_LABEL_ERROR ||
+      env.GMAIL_LABEL_ERROR ||
+      EMAIL_GATEWAY_CONFIG.LABEL_ERROR
+    ).trim(),
   };
+}
+
+/**
+ * Configuration for the network invite-only vendor mailbox (VENDOR_INVITE_EMAIL_ADDRESS).
+ * Replies received here never create quotations; instead they redirect vendors to the portal.
+ */
+function resolveVendorInviteConfig(env = process.env) {
+  const splitList = (value) =>
+    String(value || '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+
+  return {
+    enabled: String(
+      env.VENDOR_INVITE_GATEWAY_ENABLED !== undefined
+        ? env.VENDOR_INVITE_GATEWAY_ENABLED
+        : (env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
+          ? env.VENDOR_EMAIL_GATEWAY_ENABLED
+          : env.EMAIL_GATEWAY_ENABLED || 'true')
+    ).toLowerCase() === 'true',
+    user: (
+      env.VENDOR_INVITE_GATEWAY_USER ||
+      env.VENDOR_INVITE_EMAIL_ADDRESS ||
+      env.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+      ''
+    ).trim(),
+    address: (
+      env.VENDOR_INVITE_EMAIL_ADDRESS ||
+      env.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+      ''
+    ).trim(),
+    mailbox: (env.VENDOR_INVITE_GATEWAY_MAILBOX || env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    pollIntervalMs: Math.max(
+      Number(
+        env.VENDOR_INVITE_GATEWAY_POLL_MS ||
+        env.VENDOR_EMAIL_GATEWAY_POLL_MS ||
+        env.EMAIL_GATEWAY_POLL_MS ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS
+      ),
+      EMAIL_GATEWAY_CONFIG.MIN_POLL_MS
+    ),
+    maxPerPoll: Math.max(
+      Number(
+        env.VENDOR_INVITE_GATEWAY_MAX_PER_POLL ||
+        env.VENDOR_EMAIL_GATEWAY_MAX_PER_POLL ||
+        env.EMAIL_GATEWAY_MAX_PER_POLL ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL
+      ),
+      1
+    ),
+    allowedSenders: splitList(
+      env.VENDOR_INVITE_GATEWAY_ALLOWED_SENDERS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS ||
+      env.EMAIL_GATEWAY_ALLOWED_SENDERS
+    ),
+    allowedDomains: splitList(
+      env.VENDOR_INVITE_GATEWAY_ALLOWED_DOMAINS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS ||
+      env.EMAIL_GATEWAY_ALLOWED_DOMAINS
+    ),
+    autoRegisterUnregisteredBuyers: false,
+    isVendorMailbox: true,
+    mailboxChannel: VENDOR_MAILBOX_CHANNELS.INVITE,
+    isInviteOnlyMailbox: true,
+    labelProcessed: (
+      env.VENDOR_INVITE_GMAIL_LABEL_PROCESSED ||
+      env.VENDOR_GMAIL_LABEL_PROCESSED ||
+      env.GMAIL_LABEL_PROCESSED ||
+      EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED
+    ).trim(),
+    labelError: (
+      env.VENDOR_INVITE_GMAIL_LABEL_ERROR ||
+      env.VENDOR_GMAIL_LABEL_ERROR ||
+      env.GMAIL_LABEL_ERROR ||
+      EMAIL_GATEWAY_CONFIG.LABEL_ERROR
+    ).trim(),
+  };
+}
+
+function resolveVendorConfigs(env = process.env) {
+  return [resolveVendorConfig(env), resolveVendorInviteConfig(env)];
 }
 
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
-  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor:
-  // VENDOR_GMAIL_*) — checking the wrong one would report the vendor
-  // gateway as configured just because the buyer's Gmail API happens to be
-  // set up, or vice versa. The Gmail REST API is the only transport now
-  // (IMAP support removed — see resolveConfig()'s comment).
-  return config.isVendorMailbox
-    ? mailerService.isVendorGmailApiConfigured()
-    : mailerService.isGmailApiConfigured();
+  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor direct:
+  // VENDOR_GMAIL_*, vendor invite: VENDOR_INVITE_GMAIL_*) — checking the wrong one
+  // would misreport readiness.
+  if (!config.isVendorMailbox) {
+    return mailerService.isGmailApiConfigured();
+  }
+  if (config.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE || config.isInviteOnlyMailbox === true) {
+    return typeof mailerService.isVendorInviteGmailApiConfigured === 'function'
+      ? mailerService.isVendorInviteGmailApiConfigured()
+      : false;
+  }
+  return mailerService.isVendorGmailApiConfigured(VENDOR_MAILBOX_CHANNELS.DIRECT);
 }
 
 /**
@@ -411,6 +545,69 @@ function normalizeRecipientList(input) {
   return result;
 }
 
+function normalizeSingleMailbox(value) {
+  if (!value) return '';
+  const bracketMatch = String(value).match(/<\s*([^<>]+)\s*>/);
+  return (bracketMatch ? bracketMatch[1] : String(value)).trim().toLowerCase();
+}
+
+function collectRecipientAddresses(message) {
+  if (!message || typeof message !== 'object') return [];
+  const fields = [
+    message.toAddresses,
+    message.toAddress,
+    message.to,
+    message.deliveredTo,
+    message.originalTo,
+    message.headers?.['delivered-to'],
+    message.headers?.['x-original-to'],
+  ];
+  const flattened = [];
+  for (const val of fields) {
+    if (Array.isArray(val)) flattened.push(...val);
+    else if (val) flattened.push(val);
+  }
+  return normalizeRecipientList(flattened);
+}
+
+/**
+ * Strict buyer mailbox allowlist: ONLY mail addressed explicitly to the buyer
+ * requisition intake address (rfq@procucev.com) and NOT originating from the
+ * vendor poller or targeting non-buyer mailboxes (invitations@procucev.com,
+ * gmtrfq@procucev.com) is permitted to create a Buyer RFQ or auto-register.
+ */
+function isStrictBuyerRfqMailbox(message, config = {}) {
+  if (config?.isVendorMailbox === true) {
+    return false;
+  }
+
+  const recipients = collectRecipientAddresses(message);
+
+  const allowedBuyerMailbox =
+    normalizeSingleMailbox(process.env.EMAIL_GATEWAY_ADDRESS || STRICT_BUYER_RFQ_MAILBOX) ||
+    STRICT_BUYER_RFQ_MAILBOX;
+
+  const blockedMailboxes = new Set([
+    ...NON_BUYER_MAILBOX_BLOCKLIST.map(normalizeSingleMailbox),
+    normalizeSingleMailbox(STRICT_VENDOR_INVITATION_MAILBOX),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_EMAIL_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_GATEWAY_USER),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER),
+    normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_USER),
+  ].filter(Boolean));
+  blockedMailboxes.delete(allowedBuyerMailbox);
+
+  if (recipients.some((addr) => blockedMailboxes.has(addr))) {
+    return false;
+  }
+
+  return recipients.includes(allowedBuyerMailbox);
+}
+
 function isGatewayOrSystemEmail(email, config = {}) {
   if (!email) return true;
   const lower = String(email).trim().toLowerCase();
@@ -422,6 +619,12 @@ function isGatewayOrSystemEmail(email, config = {}) {
     process.env.SMTP_USER,
     process.env.SMTP_FROM,
     process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
     process.env.VENDOR_SMTP_USER,
@@ -632,17 +835,25 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       (allowedDomains.length > 0 && !allowedDomains.includes((senderAddress.split('@')[1] || '').toLowerCase())) ||
       !senderAddress;
 
+    const senderVendorRecord = senderAddress
+      ? await emailGateway.resolveVendorFromEmail(senderAddress, null).catch(() => null)
+      : null;
+
     const isUnregisteredSender =
+      isStrictBuyerRfqMailbox(message, config) &&
       !isDomainOrSenderRestricted &&
       !message?.automatedReason &&
       !isSystemOrAutomatedSender(senderAddress) &&
-      (!config?.isVendorMailbox || config?.autoRegisterUnregisteredBuyers !== false) &&
+      !senderVendorRecord &&
+      !config?.isVendorMailbox &&
       config?.autoRegisterUnregisteredBuyers !== false;
 
     if (!isUnregisteredSender) {
       return {
         allowed: false,
-        reason: EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', senderAddress),
+        reason: senderVendorRecord
+          ? EMAIL_GATEWAY_MESSAGES.EXISTING_VENDOR_BLOCKED
+          : EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', senderAddress),
         scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
         primaryBuyerAccount: null,
         sharedBuyerAccounts: [],
@@ -652,7 +863,25 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       };
     }
 
-    const onboardResult = await emailGateway.getOrCreateBuyerAccount(senderAddress);
+    const onboardResult = await emailGateway.getOrCreateBuyerAccount(senderAddress, {
+      isStrictBuyerMailbox: true,
+    });
+    if (onboardResult?.blocked) {
+      return {
+        allowed: false,
+        reason: onboardResult.reason === 'existing_vendor'
+          ? EMAIL_GATEWAY_MESSAGES.EXISTING_VENDOR_BLOCKED
+          : EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+        scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
+        primaryBuyerAccount: null,
+        sharedBuyerAccounts: [],
+        sharedBuyerAccountIds: [],
+        sharedBuyerEmails: [],
+        shouldAutoRegisterSender: false,
+        blocked: true,
+        blockReason: onboardResult.reason,
+      };
+    }
     return {
       allowed: true,
       reason: null,
@@ -848,11 +1077,39 @@ const inFlightBuyerRegistrations = new Map();
 /**
  * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
  */
-async function getOrCreateBuyerAccount(email) {
+async function getOrCreateBuyerAccount(email, { isStrictBuyerMailbox = false } = {}) {
   const normEmail = String(email || '').trim().toLowerCase();
   if (!normEmail) {
     throw new Error('Email address is required for buyer onboarding.');
   }
+
+  // Hole 3 defense-in-depth: never auto-create buyer accounts outside rfq@procucev.com
+  if (isStrictBuyerMailbox !== true) {
+    logger.warn('Blocked buyer account creation from non-buyer mailbox path', {
+      email: normEmail,
+      isStrictBuyerMailbox,
+    }, 'EMAIL_GATEWAY');
+    return {
+      blocked: true,
+      reason: 'non_buyer_mailbox',
+      buyerAccount: null,
+      isNew: false,
+      isOnboardingPending: false,
+      tempPassword: null,
+    };
+  }
+
+  // Hole 3 guard: check vendors table BEFORE buyer creation (covers CM-added/bulk/GraphQL
+  // vendors that have a `vendors` row even when the identity `"user"` row is missing).
+  const checkExistingVendor = async () => {
+    const inMemoryVendor = storeService.getVendorById(normEmail, 'all');
+    if (inMemoryVendor) return inMemoryVendor;
+    if (typeof domainQueries.getVendorByEmailFromDB === 'function') {
+      const dbVendor = await domainQueries.getVendorByEmailFromDB(normEmail).catch(() => null);
+      if (dbVendor) return dbVendor;
+    }
+    return null;
+  };
 
   const resolvePendingTempPassword = async (account) => {
     const isPending = Boolean(
@@ -891,20 +1148,53 @@ async function getOrCreateBuyerAccount(email) {
     return { isPending, tempPassword };
   };
 
-  // 1. Check if already exists in storeService
+  // 1. Check if sender already exists in vendors (block before buyer lookup/creation)
+  const existingVendorBeforeLock = await checkExistingVendor();
+  if (existingVendorBeforeLock) {
+    logger.warn('Blocked vendor email from getOrCreateBuyerAccount (vendors match)', {
+      email: normEmail,
+      vendorId: existingVendorBeforeLock.id || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      blocked: true,
+      reason: 'existing_vendor',
+      buyerAccount: null,
+      isNew: false,
+      isOnboardingPending: false,
+      tempPassword: null,
+    };
+  }
+
+  // 2. Check if already exists in storeService
   let existing = await storeService.getBuyerAccountByEmail(normEmail);
   if (existing) {
     const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
     return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
   }
 
-  // 2. Concurrency lock per email
+  // 3. Concurrency lock per email
   if (inFlightBuyerRegistrations.has(normEmail)) {
     return await inFlightBuyerRegistrations.get(normEmail);
   }
 
   const creationPromise = (async () => {
-    // Re-check after acquiring promise
+    // Re-check vendors and existing buyer account after acquiring promise
+    const vendorDuringLock = await checkExistingVendor();
+    if (vendorDuringLock) {
+      logger.warn('Blocked vendor email inside getOrCreateBuyerAccount lock (vendors match)', {
+        email: normEmail,
+        vendorId: vendorDuringLock.id || null,
+      }, 'EMAIL_GATEWAY');
+      return {
+        blocked: true,
+        reason: 'existing_vendor',
+        buyerAccount: null,
+        isNew: false,
+        isOnboardingPending: false,
+        tempPassword: null,
+      };
+    }
+
     existing = await storeService.getBuyerAccountByEmail(normEmail);
     if (existing) {
       const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
@@ -1229,28 +1519,14 @@ function isBounceOrAutoReplyMessage(message) {
   return false;
 }
 
-/**
- * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
- */
-async function extractRfqReferenceFromEmail(message) {
-  if (!message) return { targetRfq: null, referencedNumber: null };
-  const sources = [
-    message.subject || '',
-    message.bodyText || '',
-    message.textBody || '',
-    message.text || '',
-    message.inReplyTo || '',
-    message.references || '',
-  ].join(' ');
-
+function extractRfqCandidatesFromText(text) {
+  if (!text) return [];
   const rfqRegex = /#?(RFQ[-\w\d]+)/gi;
   const rawMatches = [];
-  let m;
-  while ((m = rfqRegex.exec(sources)) !== null) {
-    rawMatches.push(m[1]);
+  let match;
+  while ((match = rfqRegex.exec(String(text))) !== null) {
+    rawMatches.push(match[1]);
   }
-  if (rawMatches.length === 0) return { targetRfq: null, referencedNumber: null };
-
   const candidates = [];
   for (const raw of rawMatches) {
     const trimmed = raw.trim();
@@ -1266,20 +1542,136 @@ async function extractRfqReferenceFromEmail(message) {
     candidates.push(stripped.toUpperCase());
     candidates.push(trimmed.toUpperCase());
   }
+  return Array.from(new Set(candidates));
+}
 
-  if (candidates.length === 0) return { targetRfq: null, referencedNumber: null };
+function extractThreadMessageIdTokens(message) {
+  const combined = [message?.inReplyTo || '', message?.references || ''].filter(Boolean).join(' ');
+  const tokens = [];
+  const bracketRegex = /<[^>]+>/g;
+  let m;
+  while ((m = bracketRegex.exec(combined)) !== null) {
+    tokens.push(m[0].trim());
+  }
+  if (tokens.length === 0 && combined.trim()) {
+    combined.split(/\s+/).filter(Boolean).forEach((tok) => tokens.push(tok.trim()));
+  }
+  return Array.from(new Set(tokens));
+}
 
-  // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
-  // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
-  // too: confirmed live, a vendor's quote-reply email referencing a real,
-  // currently-open RFQ number came back INVALID_RFQ ("was not found in the
-  // system") on whichever isolate the cron tick happened to run on, purely
-  // because that isolate hadn't hydrated that particular RFQ.
-  for (const cand of candidates) {
+function extractRfqFromThreadMessageIds(tokens) {
+  const results = [];
+  for (const token of tokens) {
+    const inviteIdMatch = token.match(/^<rfq-([^-@\s]+(?:-[^-@\s]+)*?)-v[A-Za-z0-9._-]+-\d+@/i);
+    if (inviteIdMatch && inviteIdMatch[1]) {
+      results.push(inviteIdMatch[1].toUpperCase());
+    }
+    extractRfqCandidatesFromText(token).forEach((cand) => results.push(cand));
+  }
+  return Array.from(new Set(results));
+}
+
+/**
+ * Extract referenced RFQ number and lookup target RFQ in priority order:
+ * 1. Thread headers (In-Reply-To / References -> stored invite_message_id or rfq-<RFQNUMBER>- pattern)
+ * 2. Subject & stripped body text, falling back to unstripped rawBodyText & bodyHtml
+ * 3. Single unambiguous open invite within the last 48 hours for the vendor
+ */
+async function extractRfqReferenceFromEmail(message, { vendorRecord = null, allowInviteFallback = false } = {}) {
+  if (!message) return { targetRfq: null, referencedNumber: null };
+
+  // Priority 1: Thread headers -> DB/memory invite lookup & embedded Message-ID pattern
+  const threadTokens = extractThreadMessageIdTokens(message);
+  if (threadTokens.length > 0) {
+    let trackedInvite = storeService.findVendorInviteByMessageId(threadTokens);
+    if (!trackedInvite && pool.hasStorage() && typeof domainQueries.findRfqVendorInviteByMessageIdsFromDB === 'function') {
+      trackedInvite = await domainQueries.findRfqVendorInviteByMessageIdsFromDB(threadTokens).catch(() => null);
+    }
+    const trackedRfqNumber = trackedInvite && (trackedInvite.rfq_number || trackedInvite.rfqNumber || trackedInvite.rfq_id || trackedInvite.rfqId);
+    if (trackedRfqNumber) {
+      const foundViaInvite = await storeService.getRFQByIdAsync(trackedRfqNumber);
+      if (foundViaInvite) {
+        return { targetRfq: foundViaInvite, referencedNumber: foundViaInvite.rfqNumber || trackedRfqNumber };
+      }
+    }
+    const threadCandidates = extractRfqFromThreadMessageIds(threadTokens);
+    for (const cand of threadCandidates) {
+      const foundRfq = await storeService.getRFQByIdAsync(cand);
+      if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
+    }
+  }
+
+  // Priority 2a: Subject, stripped bodyText, attachment filenames, and headers
+  const attachmentFileNames = Array.isArray(message.attachments)
+    ? message.attachments.map((att) => att && (att.fileName || att.filename)).filter(Boolean)
+    : [];
+  const primarySources = [
+    message.subject || '',
+    message.bodyText || '',
+    message.textBody || '',
+    message.text || '',
+    message.inReplyTo || '',
+    message.references || '',
+    ...attachmentFileNames,
+  ].join(' ');
+  const primaryCandidates = extractRfqCandidatesFromText(primarySources);
+  for (const cand of primaryCandidates) {
     const foundRfq = await storeService.getRFQByIdAsync(cand);
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
-  return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
+
+  // Priority 2b: Fall back to unstripped rawBodyText, bodyHtml, and attachment document text
+  // (e.g. when vendor changed subject to "Offer" and quoted invite or put RFQ number in the attached PDF/Word/Excel)
+  const htmlFlattened = message.bodyHtml && typeof emailIngestionService.flattenHtmlBody === 'function'
+    ? emailIngestionService.flattenHtmlBody(message.bodyHtml)
+    : '';
+  let attachmentText = '';
+  if (Array.isArray(message.attachments) && message.attachments.length > 0 && typeof quoteDocumentExtractor.extractVendorQuoteAttachments === 'function') {
+    try {
+      attachmentText = quoteDocumentExtractor.extractVendorQuoteAttachments(message.attachments).extractedText || '';
+    } catch {
+      attachmentText = '';
+    }
+  }
+  const fallbackSources = [
+    message.rawBodyText || '',
+    htmlFlattened,
+    message.bodyHtml || '',
+    attachmentText,
+  ].filter(Boolean).join(' ');
+  const fallbackCandidates = extractRfqCandidatesFromText(fallbackSources);
+  for (const cand of fallbackCandidates) {
+    const foundRfq = await storeService.getRFQByIdAsync(cand);
+    if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
+  }
+
+  const firstReferencedNumber = primaryCandidates[0] || fallbackCandidates[0] || null;
+
+  // Priority 3: Unambiguous single active open invite within the last 48h
+  if (!firstReferencedNumber && allowInviteFallback) {
+    const resolvedVendor = vendorRecord || (message.fromAddress ? await emailGateway.resolveVendorFromEmail(message.fromAddress, null) : null);
+    if (resolvedVendor || message.fromAddress) {
+      const openInvites = await storeService.getOpenVendorInvitesWithinWindow(
+        resolvedVendor,
+        message.fromAddress,
+        V0_QUOTES_DISPATCH_WINDOW_MS
+      );
+      if (openInvites.length === 1) {
+        const singleInvite = openInvites[0];
+        const fallbackRfq = await storeService.getRFQByIdAsync(singleInvite.rfqId || singleInvite.rfqNumber);
+        if (fallbackRfq) {
+          return {
+            targetRfq: fallbackRfq,
+            referencedNumber: fallbackRfq.rfqNumber || singleInvite.rfqNumber,
+            resolutionMethod: 'single_open_invite_fallback',
+          };
+        }
+      }
+    }
+  }
+
+  if (!firstReferencedNumber) return { targetRfq: null, referencedNumber: null };
+  return { targetRfq: null, referencedNumber: firstReferencedNumber };
 }
 
 /**
@@ -1301,6 +1693,12 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.SMTP_USER,
     process.env.SMTP_FROM,
     process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
     process.env.VENDOR_SMTP_USER,
@@ -1346,6 +1744,7 @@ const AUTO_REPLY_KIND = {
   VENDOR_ISSUE: 'VENDOR_ISSUE',
   CREDITS_EXHAUSTED: 'CREDITS_EXHAUSTED',
   PORTAL_REDIRECT: 'PORTAL_REDIRECT',
+  VENDOR_INVITE_PORTAL_REDIRECT: 'VENDOR_INVITE_PORTAL_REDIRECT',
   QUOTE_ACK: 'QUOTE_ACK',
   RFQ_ACK: 'RFQ_ACK',
   RFQ_NOT_CREATED: 'RFQ_NOT_CREATED',
@@ -1369,6 +1768,7 @@ const AUTO_REPLY_COOLDOWN = {
   [AUTO_REPLY_KIND.VENDOR_ISSUE]: { statuses: [INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED], ...VENDOR_NOTICE_LIMIT },
   [AUTO_REPLY_KIND.CREDITS_EXHAUSTED]: { statuses: [INGESTION_OUTCOME.CREDITS_EXHAUSTED], ...VENDOR_NOTICE_LIMIT },
   [AUTO_REPLY_KIND.PORTAL_REDIRECT]: { statuses: [INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED], ...VENDOR_NOTICE_LIMIT },
+  [AUTO_REPLY_KIND.VENDOR_INVITE_PORTAL_REDIRECT]: { statuses: [INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED], ...VENDOR_NOTICE_LIMIT },
   // A registered buyer is told each time an email of theirs did not become an
   // RFQ, up to a few an hour — enough for someone correcting and resending,
   // not enough for a machine loop.
@@ -1556,6 +1956,78 @@ function decryptAcknowledgementPassword(encryptedPassword, messageId) {
   });
 }
 
+/** Normalise line items from an RFQ into the Email 2 acknowledgement template shape. */
+function normalizeRfqAckLineItems(rfq = {}) {
+  const rawEntities = Array.isArray(rfq?.extractedEntities) && rfq.extractedEntities.length > 0
+    ? rfq.extractedEntities
+    : Array.isArray(rfq?.items)
+      ? rfq.items
+      : [];
+  return rawEntities.map((it) => ({
+    item_name: it.itemName || it.name || it.item_name || null,
+    item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
+    qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
+    uom: it.unit || it.uom || null,
+  }));
+}
+
+/** Resolve the whole-number supplier count required by transactional Email 2 templates. */
+function resolveRfqAckSuppliersCount(rfq = {}) {
+  if (Array.isArray(rfq?.assignedVendors) && rfq.assignedVendors.length > 0) {
+    return rfq.assignedVendors.length;
+  }
+  if (Number.isFinite(rfq?.procucevVendorCount) && rfq.procucevVendorCount >= 0) {
+    return rfq.procucevVendorCount;
+  }
+  return 0;
+}
+
+/**
+ * Reconstruct missing RFQ acknowledgement fields from the persisted RFQ record so older
+ * `ACK_PENDING` rows without `suppliersInvited` or summary metadata recover cleanly on retry.
+ */
+async function resolveAckRetryContext(row, saved) {
+  const rfqLookupRef = row.rfq_id || row.rfq_number || null;
+  const needsRfqHydration =
+    saved.suppliersInvited === undefined
+    || saved.suppliersInvited === null
+    || !saved.category
+    || !saved.deliveryLocation
+    || !saved.deliveryDate
+    || !Array.isArray(saved.items);
+  const persistedRfq =
+    needsRfqHydration && rfqLookupRef && typeof domainQueries.getRFQByIdFromDB === 'function'
+      ? await domainQueries.getRFQByIdFromDB(rfqLookupRef).catch(() => null)
+      : null;
+
+  const items = Array.isArray(saved.items)
+    ? saved.items
+    : (persistedRfq ? normalizeRfqAckLineItems(persistedRfq) : undefined);
+  const itemCount =
+    saved.itemCount !== undefined && saved.itemCount !== null
+      ? saved.itemCount
+      : (Array.isArray(items) ? items.length : undefined);
+  const suppliersInvited =
+    saved.suppliersInvited !== undefined && saved.suppliersInvited !== null
+      ? saved.suppliersInvited
+      : (persistedRfq
+        ? resolveRfqAckSuppliersCount(persistedRfq)
+        : (pool.hasStorage() ? 0 : undefined));
+  const deliveryDate = saved.deliveryDate || persistedRfq?.targetDeliveryDate;
+
+  return {
+    rfqTitle: saved.rfqTitle || persistedRfq?.title || row.subject,
+    category: saved.category || persistedRfq?.category,
+    deliveryLocation: saved.deliveryLocation || persistedRfq?.deliveryLocation,
+    deliveryDate,
+    requiredBy: saved.requiredBy || deliveryDate,
+    quoteDeadline: saved.quoteDeadline || saved.deadline || persistedRfq?.deadline,
+    suppliersInvited,
+    items,
+    itemCount,
+  };
+}
+
 /**
  * Keep an acknowledgement that could not be sent, so a later poll retries it.
  * Before this, a failed send was only logged — every buyer whose RFQ was raised
@@ -1581,15 +2053,24 @@ async function queueAcknowledgement(rfqKey, ack) {
     'buyerEmail',
     'recipientName',
     'quotesCount',
+    'category',
+    'deliveryLocation',
+    'requiredBy',
+    'quoteDeadline',
+    'deadline',
+    'suppliersInvited',
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
   if (
-    ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
-    && ack.itemCount !== undefined
+    ack.itemCount !== undefined
     && ack.itemCount !== null
+    && (!ack.deliveryKind || ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT)
   ) {
     detailObj.itemCount = ack.itemCount;
+  }
+  if (Array.isArray(ack.items) && ack.items.length > 0) {
+    detailObj.items = ack.items;
   }
   const messageId = `${rfqKey}#ack`;
   let status = INGESTION_OUTCOME.ACK_PENDING;
@@ -1843,6 +2324,15 @@ async function retryPendingAcknowledgements({
           itemCount: Number(saved.itemCount) || 0,
           cc: saved.cc,
         }), 'Vendor portal redirect notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT) {
+        ensureMailDeliveryAccepted(await mailerService.sendVendorInvitePortalRedirectEmail(row.from_address, {
+          rfq: { id: row.rfq_id || row.rfq_number, rfqNumber: row.rfq_number, title: saved.rfqTitle || row.subject },
+          rfqId: row.rfq_id || row.rfq_number,
+          rfqNumber: row.rfq_number,
+          vendorName: saved.vendorName || null,
+          isRegisteredVendor: Boolean(saved.isRegisteredVendor),
+          cc: saved.cc,
+        }), 'Vendor invite portal redirect notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK) {
         const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
         const quote = Array.isArray(rfq?.quotes)
@@ -1919,34 +2409,37 @@ async function retryPendingAcknowledgements({
           }), 'Buyer quote notification retry');
         }
       } else if (retryTempPassword) {
+        const ackRetry = await resolveAckRetryContext(row, saved);
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           tempPassword: retryTempPassword,
           rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          deliveryDate: saved.deliveryDate,
+          rfqTitle: ackRetry.rfqTitle,
+          deliveryDate: ackRetry.deliveryDate,
           mobileNumber: saved.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
+          category: ackRetry.category,
+          deliveryLocation: ackRetry.deliveryLocation,
+          requiredBy: ackRetry.requiredBy,
+          quoteDeadline: ackRetry.quoteDeadline,
+          suppliersInvited: ackRetry.suppliersInvited,
+          items: ackRetry.items,
         }), 'Buyer onboarding acknowledgement retry');
       } else {
+        const ackRetry = await resolveAckRetryContext(row, saved);
         ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          deliveryDate: saved.deliveryDate,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
+          rfqTitle: ackRetry.rfqTitle,
+          category: ackRetry.category,
+          ...(ackRetry.itemCount !== undefined ? { itemCount: ackRetry.itemCount } : {}),
+          deliveryLocation: ackRetry.deliveryLocation,
+          deliveryDate: ackRetry.deliveryDate,
+          requiredBy: ackRetry.requiredBy,
+          quoteDeadline: ackRetry.quoteDeadline,
+          suppliersInvited: ackRetry.suppliersInvited,
+          items: ackRetry.items,
         }), 'RFQ acknowledgement retry');
       }
       const completed = await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
@@ -2125,48 +2618,53 @@ function checkRfqCredits(buyerAccount, sourcingMode, needed) {
  * portal upload is stored. Best-effort: a file that is the wrong type, too large,
  * or cannot be written is logged and left off — it never stops the RFQ.
  */
-async function storeEmailAttachments(message) {
+async function storeEmailAttachments(message, { saveFn = null, contextLabel = 'RFQ' } = {}) {
   const saved = [];
+  const persist = typeof saveFn === 'function' ? saveFn : (input) => rfqAttachmentService.saveAttachment(input);
   for (const attachment of (message && message.attachments) || []) {
-    // Every role is kept ('inline' means "sent to Gemini inline", which is what
-    // a PDF requisition is); saveAttachment's MIME allow-list decides what is
-    // storable, exactly as for a portal upload.
+    // Every role is kept; saveAttachment's MIME allow-list decides what is
+    // storable, resolving generic octet-stream uploads via filename extension.
     if (!attachment || !attachment.content) continue;
+    const attachmentName = attachment.fileName || attachment.filename;
     // Signature graphics, company logos, social icons, and tracking pixels are never RFQ documents.
     const isSig = attachment.isSignature || attachment.role === 'signature' || (typeof emailIngestionService.isSignatureAttachment === 'function' && emailIngestionService.isSignatureAttachment(attachment));
     if (isSig) {
       logger.info(
-        `Skipped email signature graphic from RFQ attachments: ${attachment.fileName || attachment.filename || 'unnamed'}`,
-        { fileName: attachment.fileName || attachment.filename, contentType: attachment.contentType, size: attachment.size },
+        `Skipped email signature graphic from ${contextLabel} attachments: ${attachmentName || 'unnamed'}`,
+        { fileName: attachmentName, contentType: attachment.contentType, size: attachment.size },
         'EMAIL_GATEWAY'
       );
       continue;
     }
+    const resolvedMime = resolveAttachmentContentType(
+      attachment.contentType || attachment.mimeType,
+      attachmentName
+    );
     try {
       const result = await withTimeout(
-        rfqAttachmentService.saveAttachment({
-          fileName: attachment.fileName,
-          mimeType: attachment.contentType,
+        persist({
+          fileName: attachmentName,
+          mimeType: resolvedMime,
           content: Buffer.isBuffer(attachment.content)
             ? attachment.content.toString('base64')
             : String(attachment.content),
         }),
         POLL_CALL_TIMEOUT_MS,
-        'RFQ attachment upload'
+        `${contextLabel} attachment upload`
       );
-      if (result.status === rfqAttachmentService.ATTACHMENT_STATUS.SAVED) {
+      if (result && result.status === rfqAttachmentService.ATTACHMENT_STATUS.SAVED) {
         saved.push(result.attachment);
-      } else {
+      } else if (result) {
         logger.warn(
-          `Email attachment ${attachment.fileName} not stored on the RFQ (${result.status})`,
-          { fileName: attachment.fileName, contentType: attachment.contentType },
+          `Email attachment ${attachmentName} not stored on the ${contextLabel} (${result.status})`,
+          { fileName: attachmentName, contentType: resolvedMime },
           'EMAIL_GATEWAY'
         );
       }
     } catch (err) {
       logger.warn(
-        `Email attachment ${attachment.fileName} not stored on the RFQ: ${err.message}`,
-        { fileName: attachment.fileName },
+        `Email attachment ${attachmentName} not stored on the ${contextLabel}: ${err.message}`,
+        { fileName: attachmentName },
         'EMAIL_GATEWAY'
       );
     }
@@ -2183,16 +2681,28 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   const email = String(fromAddress).trim().toLowerCase();
 
   // Only configured gateway addresses are excluded. No personal mailbox is assumed when they are unset.
-  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim().toLowerCase();
-  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '').trim().toLowerCase();
-  const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
+  const excludedAddresses = [
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
+    process.env.VENDOR_EMAIL_GATEWAY_USER,
+    process.env.VENDOR_GMAIL_SENDER_EMAIL,
+    process.env.EMAIL_GATEWAY_ADDRESS,
+    process.env.EMAIL_GATEWAY_USER,
+    process.env.GMAIL_SENDER_EMAIL,
+  ]
+    .filter(Boolean)
+    .map((addr) => {
+      const m = String(addr).match(/<\s*([^<>]+)\s*>/);
+      return (m ? m[1] : String(addr)).trim().toLowerCase();
+    });
 
   // Internal gateway accounts can NEVER be a vendor
-  if (
-    (vendorGatewayAddr && email === vendorGatewayAddr) ||
-    (buyerGatewayAddr && email === buyerGatewayAddr) ||
-    (gmailApiAddr && email === gmailApiAddr)
-  ) {
+  if (excludedAddresses.includes(email)) {
     return null;
   }
 
@@ -2446,7 +2956,22 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     : 0;
 
   const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
-  const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
+  const hasExplicitExtractionIssue = Boolean(
+    extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry)
+  );
+  const extractedLineItemQuotes = extraction && Array.isArray(extraction.lineItemQuotes)
+    ? extraction.lineItemQuotes
+    : [];
+  const hasExtractedQuotePrice = Boolean(
+    extraction && (
+      Number(extraction.unitPrice) > 0 ||
+      (Number(extraction.totalPrice) > 0 && rfqQty > 0) ||
+      extractedLineItemQuotes.some((lq) => Number(lq && lq.unitPrice) > 0)
+    )
+  );
+  // Genuine clarification queries lack extracted pricing or are flagged by AI; courtesy sign-offs
+  // ("feel free to call for any doubt or query") below a valid priced quotation must still ingest.
+  const isIssueOrQuery = hasExplicitExtractionIssue || (!hasExtractedQuotePrice && isVendorIssueOrQueryMessage(message));
 
   if (isIssueOrQuery) {
     logger.warn(
@@ -2470,8 +2995,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
         }
       } catch (inqErr) {
         logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
-        // Leave this inbound message retryable instead of acknowledging and
-        // marking it processed while its clarification is missing from the RFQ.
         throw inqErr;
       }
     }
@@ -2625,6 +3148,14 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     };
   }
 
+  const savedQuoteAttachments =
+    Array.isArray(message.attachments) && message.attachments.length > 0 && typeof quoteAttachmentService.saveQuoteAttachment === 'function'
+      ? await storeEmailAttachments(message, {
+          saveFn: (input) => quoteAttachmentService.saveQuoteAttachment(input, { rfqId: targetRfq.id, vendorId: vendorRecord.id }),
+          contextLabel: 'quote',
+        })
+      : [];
+
   const quote = {
     vendorId: vendorRecord.id,
     vendorName: vendorRecord.name,
@@ -2647,7 +3178,15 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     deliveryCharges: extraction.deliveryCharges ?? null,
     deliveryDate: extraction.deliveryDate || null,
     quotationValidity: extraction.quotationValidity || null,
+    ...(savedQuoteAttachments.length > 0 ? { attachments: savedQuoteAttachments } : {}),
   };
+
+  const isV0Target = Boolean(
+    targetRfq &&
+    (targetRfq.sourcingMode === RFQ_MODES.MODE_0 ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'v0' ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'version_0')
+  );
 
   const quoteAckDecision = await emailGateway.shouldSendAutoReply(
     message,
@@ -2656,6 +3195,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   );
   const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, {
     includeDeliveryState: true,
+    deferV0BuyerDispatch: isV0Target,
     ...(quoteAckDecision.allowed ? {
       vendorQuoteAcknowledgement: {
         idempotencyKey: emailGatewayNoticeKey(message, 'VENDOR_QUOTE_ACK'),
@@ -2730,7 +3270,20 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     );
   }
 
-  if (buyerEmail) {
+  if (isV0Target) {
+    try {
+      await storeService.checkAndDispatchBuyerQuotations(targetRfq.rfqNumber, {
+        trigger: 'vendor_quote_email',
+      });
+    } catch (dispatchErr) {
+      logger.error('Failed to evaluate V0 buyer quotation dispatch after email quote ingestion', {
+        error: dispatchErr,
+        rfqId: targetRfq.id,
+        rfqNumber: targetRfq.rfqNumber,
+        vendorId: vendorRecord.id,
+      }, 'EMAIL_GATEWAY');
+    }
+  } else if (buyerEmail) {
     try {
       const buyerAcc = await storeService.getBuyerAccountByEmail(buyerEmail);
       const isPendingVerification = storeService.isBuyerProfileUpdateRequired(buyerAcc, targetRfq);
@@ -2828,6 +3381,91 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   };
 }
 
+function isInviteOnlyMailboxMessage(message, config = {}) {
+  if (config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE || config?.isInviteOnlyMailbox === true) {
+    return true;
+  }
+  const configuredInviteMailbox = normalizeSingleMailbox(process.env.VENDOR_INVITE_EMAIL_ADDRESS);
+  if (!configuredInviteMailbox) return false;
+  const configuredDirectMailbox = normalizeSingleMailbox(
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_USER
+  );
+  const recipients = collectRecipientAddresses(message);
+  return (
+    recipients.includes(configuredInviteMailbox) &&
+    (!configuredDirectMailbox || configuredDirectMailbox === configuredInviteMailbox || !recipients.includes(configuredDirectMailbox))
+  );
+}
+
+/**
+ * Handles replies landing on the portal-only Network Invite mailbox (VENDOR_INVITE_EMAIL_ADDRESS).
+ * Never creates quotations/bids or deducts credits; identifies the RFQ and sends a portal redirect.
+ */
+async function processVendorInviteReply(message, config, { targetRfq, referencedNumber, vendorRecord } = {}) {
+  if (!targetRfq) {
+    const detail = referencedNumber
+      ? EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber)
+      : EMAIL_GATEWAY_MESSAGES.VENDOR_INVITE_NO_RFQ;
+    logger.info('Invite-only mailbox message dropped without resolvable RFQ reference', {
+      fromAddress: message.fromAddress,
+      referencedNumber: referencedNumber || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.INVALID_RFQ,
+      detail,
+      message,
+    };
+  }
+
+  let isRegisteredVendor = false;
+  if (message.fromAddress) {
+    if (pool.hasStorage() && typeof identityQueries.findUserByEmail === 'function') {
+      const existingUser = await identityQueries.findUserByEmail(message.fromAddress).catch(() => null);
+      isRegisteredVendor = Boolean(existingUser);
+    } else if (vendorRecord) {
+      isRegisteredVendor = vendorRecord.hasIdentity !== false && vendorRecord.isRegistered !== false;
+    }
+  }
+
+  await sendAutoReply(
+    message,
+    AUTO_REPLY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
+    () =>
+      mailerService.sendVendorInvitePortalRedirectEmail(message.fromAddress, {
+        rfq: targetRfq,
+        rfqId: targetRfq.id || targetRfq.rfqNumber,
+        rfqNumber: targetRfq.rfqNumber,
+        vendorName: vendorRecord?.name || message.fromName || null,
+        isRegisteredVendor,
+      }),
+    {
+      config,
+      rfqNumber: targetRfq.rfqNumber,
+      failureLog: 'Failed to send invite-only mailbox portal submission redirect email',
+      retryDelivery: {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
+        rfqId: targetRfq.id || null,
+        rfqNumber: targetRfq.rfqNumber,
+        payload: {
+          rfqTitle: targetRfq.title || null,
+          vendorName: vendorRecord?.name || message.fromName || null,
+          isRegisteredVendor,
+        },
+      },
+    }
+  );
+
+  return {
+    status: INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED,
+    detail: EMAIL_GATEWAY_MESSAGES.VENDOR_INVITE_PORTAL_REDIRECT_DETAIL
+      .replace('{rfqNumber}', targetRfq.rfqNumber || 'unknown'),
+    message,
+    rfq: targetRfq,
+  };
+}
+
 /**
  * Turn one raw message into an RFQ or vendor quote.
  *
@@ -2842,7 +3480,13 @@ async function processMessage(rawSource, config = resolveConfig()) {
     content: Buffer.isBuffer(rawSource) ? rawSource.toString('base64') : String(rawSource || ''),
   });
 
-  if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
+  const hasVendorReadableAttachments =
+    prepared.status === EMAIL_INGESTION_STATUS.NO_CONTENT &&
+    prepared.message &&
+    Array.isArray(prepared.message.attachments) &&
+    prepared.message.attachments.some((att) => att && att.role !== 'signature');
+
+  if (prepared.status !== EMAIL_INGESTION_STATUS.READY && !hasVendorReadableAttachments) {
     return {
       status: INGESTION_OUTCOME.UNREADABLE,
       detail: EMAIL_GATEWAY_MESSAGES.PREPARE_REFUSED.replace('{status}', prepared.status),
@@ -2896,13 +3540,44 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  if (
+    isInviteOnlyMailboxMessage(message, config) &&
+    (isSystemOrAutomatedSender(message.fromAddress) || Boolean(message.automatedReason))
+  ) {
+    logger.info(`Silently dropping automated/bot message on invite mailbox from ${message.fromAddress}`, {
+      subject: message.subject,
+      automatedReason: message.automatedReason || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped automated/bot message on invite-only vendor mailbox',
+      message,
+    };
+  }
+
 
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
-  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
-  const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
   const buyerAccount = await storeService.getBuyerAccountByEmail(message.fromAddress);
   const isRegisteredBuyer = Boolean(buyerAccount);
+  const initialVendorRecord = await resolveVendorFromEmail(message.fromAddress, null);
+  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message, {
+    vendorRecord: initialVendorRecord,
+    allowInviteFallback: Boolean((initialVendorRecord && !isRegisteredBuyer) || config?.isVendorMailbox),
+  });
+  const vendorRecord = targetRfq
+    ? ((await resolveVendorFromEmail(message.fromAddress, targetRfq)) || initialVendorRecord)
+    : initialVendorRecord;
+
+  // Network Invite mailbox (`VENDOR_INVITE_EMAIL_ADDRESS`) is strictly portal-only:
+  // never create bids/quotations or fall through to buyer RFQ creation.
+  if (isInviteOnlyMailboxMessage(message, config)) {
+    return await processVendorInviteReply(message, config, {
+      targetRfq,
+      referencedNumber,
+      vendorRecord,
+    });
+  }
 
   // If sender is both buyer and vendor, but is the owner/creator of the target RFQ,
   // they are managing their RFQ as a buyer, not quoting on their own requirement.
@@ -2914,14 +3589,43 @@ async function processMessage(rawSource, config = resolveConfig()) {
   );
 
   if (targetRfq && vendorRecord && !isOwnerOfTargetRfq) {
+    const isV0TargetRfq =
+      targetRfq.sourcingMode === RFQ_MODES.MODE_0 ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'v0' ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'version_0';
+    if (isV0TargetRfq) {
+      const invited = await storeService.isVendorInvitedToRfq(targetRfq, vendorRecord, message.fromAddress);
+      if (!invited) {
+        return {
+          status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+          detail: EMAIL_GATEWAY_MESSAGES.VENDOR_NOT_INVITED_TO_RFQ
+            .replace('{address}', message.fromAddress || 'unknown')
+            .replace('{rfqNumber}', targetRfq.rfqNumber || 'unknown'),
+          message,
+          rfq: targetRfq,
+        };
+      }
+    }
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
   }
 
-  // If RFQ is not found, but a vendor (who is not a registered buyer) referenced an RFQ number:
-  if (!targetRfq && referencedNumber && vendorRecord && !isRegisteredBuyer) {
+  // Hole 1 guard: a registered vendor (without a buyer account) whose message did not
+  // resolve to any existing RFQ must NEVER fall through to Buyer RFQ creation or onboarding.
+  if (!targetRfq && vendorRecord && !isRegisteredBuyer) {
+    const detail = referencedNumber
+      ? EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber)
+      : (config?.isVendorMailbox
+        ? EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ
+        : EMAIL_GATEWAY_MESSAGES.VENDOR_MISSING_RFQ_REFERENCE.replace('{address}', message.fromAddress || 'unknown'));
+    logger.warn('Blocked vendor email without resolvable RFQ reference from Buyer RFQ creation', {
+      fromAddress: message.fromAddress,
+      vendorId: vendorRecord.id,
+      referencedNumber: referencedNumber || null,
+      isVendorMailbox: Boolean(config?.isVendorMailbox),
+    }, 'EMAIL_GATEWAY');
     return {
       status: INGESTION_OUTCOME.INVALID_RFQ,
-      detail: EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber),
+      detail,
       message,
     };
   }
@@ -2935,12 +3639,23 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // If message arrived on the vendor quotation mailbox, vendor submissions require an RFQ.
-  // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
-  // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
   if (config && config.isVendorMailbox) {
+    const incomingRecipients = collectRecipientAddresses(message);
+    const isBlockedNonBuyerAlias = incomingRecipients.some((addr) =>
+      addr === normalizeSingleMailbox(STRICT_VENDOR_INVITATION_MAILBOX) ||
+      NON_BUYER_MAILBOX_BLOCKLIST.map(normalizeSingleMailbox).includes(addr)
+    );
     const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
       `${message.subject || ''} ${message.bodyText || ''}`
     );
+
+    if (isBlockedNonBuyerAlias && !targetRfq) {
+      return {
+        status: INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX,
+        detail: EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+        message,
+      };
+    }
 
     if (!isRegisteredBuyer && isRfqSubjectOrContent && config.autoRegisterUnregisteredBuyers === false) {
       await sendAutoReply(
@@ -2978,6 +3693,30 @@ async function processMessage(rawSource, config = resolveConfig()) {
         message,
       };
     }
+  }
+
+  // Hole 2 strict mailbox gate immediately before Buyer RFQ creation & onboarding
+  if (!isStrictBuyerRfqMailbox(message, config)) {
+    logger.warn('Skipped non-buyer mailbox email before Buyer RFQ creation', {
+      fromAddress: message.fromAddress,
+      toAddresses: message.toAddresses,
+      deliveredTo: message.deliveredTo,
+      originalTo: message.originalTo,
+      isVendorMailbox: Boolean(config?.isVendorMailbox),
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX,
+      detail: EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+      message,
+    };
+  }
+
+  if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
+    return {
+      status: INGESTION_OUTCOME.UNREADABLE,
+      detail: EMAIL_GATEWAY_MESSAGES.PREPARE_REFUSED.replace('{status}', prepared.status),
+      message,
+    };
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
@@ -3276,24 +4015,11 @@ async function processMessage(rawSource, config = resolveConfig()) {
       PLACEHOLDER_MOBILE_NUMBER;
     const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || PLACEHOLDER_MOBILE_NUMBER : PLACEHOLDER_MOBILE_NUMBER;
 
-    const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
-      ? created.extractedEntities
-      : Array.isArray(created.items)
-        ? created.items
-        : [];
-
     // A field the document did not state stays null. It is not replaced with a stand-in name, quantity or unit.
-    const normalizedLineItems = rawEntities.map((it) => ({
-      item_name: it.itemName || it.name || it.item_name || null,
-      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
-      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
-      uom: it.unit || it.uom || null,
-    }));
+    const normalizedLineItems = normalizeRfqAckLineItems(created);
 
-    // The number of suppliers actually assigned. With none assigned and no recorded count, it stays null.
-    const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
-      ? created.assignedVendors.length
-      : (Number.isFinite(created.procucevVendorCount) ? created.procucevVendorCount : null);
+    // Default to 0 when no vendors are assigned or recorded yet so Email 2 template validation succeeds.
+    const resolvedSuppliersCount = resolveRfqAckSuppliersCount(created);
 
     const notificationRecipients = Array.isArray(attribution.eligibleNotificationRecipients) && attribution.eligibleNotificationRecipients.length > 0
       ? attribution.eligibleNotificationRecipients
@@ -3311,6 +4037,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
           );
 
           const ack = {
+            rfqId: created.id,
             to: recipient.email,
             buyerName: buyerDisplayName(recipient.buyer, message),
             rfqNumber: created.rfqNumber,
@@ -3446,7 +4173,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
 
   const providerKey = options.providerKey || (
     typeof mailerService.getGmailProviderKey === 'function'
-      ? mailerService.getGmailProviderKey(config.isVendorMailbox ? 'vendor' : 'buyer')
+      ? mailerService.getGmailProviderKey(
+        config.isVendorMailbox
+          ? (config.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE ? 'vendor_invite' : 'vendor')
+          : 'buyer'
+      )
       : null
   );
   if (providerKey && typeof mailTransport.loadPersistedCooldowns === 'function') {
@@ -3837,6 +4568,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -3847,6 +4579,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -3888,12 +4621,27 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
   }
 }
 
-// Vendor replies arrive in the vendor identity's Gmail inbox, read with the
-// vendor token. Messages go through the same processMessage path as buyer mail.
+// Direct vendor quote replies arrive in VENDOR_DIRECT_RFQ_EMAIL_ADDRESS;
+// Network invite replies arrive in VENDOR_INVITE_EMAIL_ADDRESS and are redirected to the portal.
 async function pollVendorViaGmailApi(config = resolveVendorConfig(), options = {}) {
   return pollViaGmailApi(config, {
-    auth: mailerService.getVendorGmailOAuthClient(),
-    state: vendorRuntime,
+    auth: mailerService.getVendorGmailOAuthClient(
+      config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE
+        ? VENDOR_MAILBOX_CHANNELS.INVITE
+        : VENDOR_MAILBOX_CHANNELS.DIRECT
+    ),
+    state: config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE ? vendorInviteRuntime : vendorRuntime,
+    ...options,
+  });
+}
+
+async function pollVendorInviteViaGmailApi(config = resolveVendorInviteConfig(), options = {}) {
+  const auth = typeof mailerService.getVendorInviteGmailOAuthClient === 'function'
+    ? mailerService.getVendorInviteGmailOAuthClient()
+    : mailerService.getVendorGmailOAuthClient(VENDOR_MAILBOX_CHANNELS.INVITE);
+  return pollViaGmailApi(config, {
+    auth,
+    state: vendorInviteRuntime,
     ...options,
   });
 }
@@ -3911,11 +4659,15 @@ async function pollOnce(config = resolveConfig(), options = {}) {
 }
 
 /**
- * Read the vendor mailbox once and ingest vendor quote replies, via the
+ * Read the vendor direct RFQ mailbox once and ingest vendor quote replies, via the
  * vendor Gmail REST API identity. Same reasoning as pollOnce() above.
  */
 async function pollVendorOnce(config = resolveVendorConfig()) {
   return emailGateway.pollVendorViaGmailApi(config);
+}
+
+async function pollVendorInviteOnce(config = resolveVendorInviteConfig()) {
+  return emailGateway.pollVendorInviteViaGmailApi(config);
 }
 
 /**
@@ -3951,7 +4703,7 @@ function startBuyerPolling(config = resolveConfig()) {
 /**
  * Start background watching for vendor quotation mailbox.
  */
-function startVendorPolling(config = resolveVendorConfig()) {
+function startVendorPolling(config = resolveVendorConfig(), inviteConfig = resolveVendorInviteConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
@@ -3970,35 +4722,74 @@ function startVendorPolling(config = resolveVendorConfig()) {
   }, config.pollIntervalMs);
   if (typeof vendorRuntime.pollTimer.unref === 'function') vendorRuntime.pollTimer.unref();
 
+  const directAddr = normalizeSingleMailbox(config.address || config.user);
+  const inviteAddr = normalizeSingleMailbox(inviteConfig?.address || inviteConfig?.user);
+  let inviteStarted = false;
+  if (
+    inviteConfig &&
+    inviteConfig.enabled &&
+    inviteAddr &&
+    inviteAddr !== directAddr &&
+    !vendorInviteRuntime.pollTimer &&
+    emailGateway.isConfigured(inviteConfig)
+  ) {
+    vendorInviteRuntime.watchingSince = new Date().toISOString();
+    vendorInviteRuntime.pollTimer = setInterval(() => {
+      emailGateway.pollVendorInviteOnce(resolveVendorInviteConfig()).catch((err) => {
+        logger.error('Vendor invite-only gateway interval poll threw', err, 'EMAIL_GATEWAY');
+      });
+    }, inviteConfig.pollIntervalMs);
+    if (typeof vendorInviteRuntime.pollTimer.unref === 'function') vendorInviteRuntime.pollTimer.unref();
+    inviteStarted = true;
+  }
+
   logger.info(
     `Vendor quotation gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
-    { mailbox: config.mailbox },
+    { mailbox: config.mailbox, inviteMailboxStarted: inviteStarted },
     'EMAIL_GATEWAY'
   );
-  return { started: true, pollIntervalMs: config.pollIntervalMs };
+  return { started: true, pollIntervalMs: config.pollIntervalMs, inviteMailboxStarted: inviteStarted };
 }
 
 /**
- * Run one polling pass across both monitored inboxes:
- *   1. Buyer Requisitions Mailbox (e.g. rfq@procucev.com)
- *   2. Vendor Quotations Mailbox (VENDOR_EMAIL_GATEWAY_ADDRESS)
- *
- * Executes both in parallel using Promise.allSettled so an error in one inbox
- * never blocks or disrupts the other.
+ * Run one polling pass across monitored inboxes:
+ *   1. Buyer Requisitions Mailbox (rfq@procucev.com)
+ *   2. Direct Vendor Quotations Mailbox (VENDOR_DIRECT_RFQ_EMAIL_ADDRESS / legacy VENDOR_EMAIL_GATEWAY_ADDRESS)
+ *   3. Network Invite Portal-Only Mailbox (VENDOR_INVITE_EMAIL_ADDRESS, when distinct and configured)
  */
 async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig = resolveVendorConfig(), options = {}) {
   logger.info('Executing scheduled dual-inbox email poll cycle', {}, 'EMAIL_GATEWAY');
   const pollOptions = typeof options?.ensureHydrated === 'function'
     ? { ensureHydrated: options.ensureHydrated }
     : null;
-  const [buyerSettled, vendorSettled] = await Promise.allSettled([
+  const vendorInviteConfig = options?.vendorInviteConfig || resolveVendorInviteConfig();
+  const directAddr = normalizeSingleMailbox(vendorConfig?.address || vendorConfig?.user);
+  const inviteAddr = normalizeSingleMailbox(vendorInviteConfig?.address || vendorInviteConfig?.user);
+  const shouldPollInviteMailbox = Boolean(
+    inviteAddr &&
+    inviteAddr !== directAddr &&
+    typeof emailGateway.pollVendorInviteViaGmailApi === 'function' &&
+    emailGateway.isConfigured(vendorInviteConfig)
+  );
+
+  const tasks = [
     pollOptions ? emailGateway.pollOnce(buyerConfig, pollOptions) : emailGateway.pollOnce(buyerConfig),
-    // Vendor replies are read through the vendor Gmail identity only. The IMAP
-    // path cannot connect from a Worker, so it is not used here.
     pollOptions
       ? emailGateway.pollVendorViaGmailApi(vendorConfig, pollOptions)
       : emailGateway.pollVendorViaGmailApi(vendorConfig),
-  ]);
+  ];
+  if (shouldPollInviteMailbox) {
+    tasks.push(
+      pollOptions
+        ? emailGateway.pollVendorInviteViaGmailApi(vendorInviteConfig, pollOptions)
+        : emailGateway.pollVendorInviteViaGmailApi(vendorInviteConfig)
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const buyerSettled = settled[0];
+  const vendorSettled = settled[1];
+  const vendorInviteSettled = shouldPollInviteMailbox ? settled[2] : null;
 
   const buyer = buyerSettled.status === 'fulfilled'
     ? buyerSettled.value
@@ -4007,6 +4798,12 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
   const vendor = vendorSettled.status === 'fulfilled'
     ? vendorSettled.value
     : { skipped: false, error: (vendorSettled.reason && vendorSettled.reason.message) || 'Vendor poll failed' };
+
+  const vendorInvite = vendorInviteSettled
+    ? (vendorInviteSettled.status === 'fulfilled'
+      ? vendorInviteSettled.value
+      : { skipped: false, error: (vendorInviteSettled.reason && vendorInviteSettled.reason.message) || 'Vendor invite poll failed' })
+    : null;
 
   const result = {
     executedAt: new Date().toISOString(),
@@ -4018,17 +4815,25 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
       address: vendorConfig.address || vendorConfig.user || null,
       ...vendor,
     },
-    totalConsidered: (buyer.considered || 0) + (vendor.considered || 0),
-    totalIngested: (buyer.ingested || 0) + (vendor.ingested || 0),
+    ...(vendorInvite ? {
+      vendorInviteMailbox: {
+        address: vendorInviteConfig.address || vendorInviteConfig.user || null,
+        ...vendorInvite,
+      },
+    } : {}),
+    totalConsidered: (buyer.considered || 0) + (vendor.considered || 0) + (vendorInvite?.considered || 0),
+    totalIngested: (buyer.ingested || 0) + (vendor.ingested || 0) + (vendorInvite?.ingested || 0),
   };
 
   logger.info(
-    `Dual-inbox poll completed: ${result.totalIngested} ingested of ${result.totalConsidered} considered across both inboxes`,
+    `Dual-inbox poll completed: ${result.totalIngested} ingested of ${result.totalConsidered} considered across mailboxes`,
     {
       buyerIngested: buyer.ingested || 0,
       vendorIngested: vendor.ingested || 0,
+      vendorInviteIngested: vendorInvite?.ingested || 0,
       buyerConsidered: buyer.considered || 0,
       vendorConsidered: vendor.considered || 0,
+      vendorInviteConsidered: vendorInvite?.considered || 0,
     },
     'EMAIL_GATEWAY'
   );
@@ -4078,25 +4883,35 @@ function stopPolling() {
     clearInterval(vendorRuntime.pollTimer);
     vendorRuntime.pollTimer = null;
   }
+  if (vendorInviteRuntime.pollTimer) {
+    clearInterval(vendorInviteRuntime.pollTimer);
+    vendorInviteRuntime.pollTimer = null;
+  }
   runtime.isPolling = false;
   vendorRuntime.isPolling = false;
+  vendorInviteRuntime.isPolling = false;
   return buyerWasRunning;
 }
 
 /**
- * Everything the gateway panel needs for both buyer and vendor channels.
+ * Everything the gateway panel needs for buyer and vendor channels.
  */
 async function getStatus() {
   const config = emailGateway.resolveConfig();
   const configured = isConfigured(config);
   const vendorConfig = emailGateway.resolveVendorConfig();
   const vendorConfigured = isConfigured(vendorConfig);
+  const vendorInviteConfig = resolveVendorInviteConfig();
+  const vendorInviteConfigured = isConfigured(vendorInviteConfig);
 
   const configurationFault = configured ? describeConfigurationFault(config) : null;
   const lastError = configurationFault || runtime.lastError;
 
   const vendorFault = vendorConfigured ? describeConfigurationFault(vendorConfig) : null;
   const vendorLastError = vendorFault || vendorRuntime.lastError;
+
+  const vendorInviteFault = vendorInviteConfigured ? describeConfigurationFault(vendorInviteConfig) : null;
+  const vendorInviteLastError = vendorInviteFault || vendorInviteRuntime.lastError;
 
   return {
     enabled: config.enabled,
@@ -4133,6 +4948,7 @@ async function getStatus() {
       gatewayAddress: vendorConfig.address || null,
       mailboxUser: vendorConfig.user || null,
       mailbox: vendorConfig.mailbox,
+      mailboxChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
       pollIntervalMs: vendorConfig.pollIntervalMs,
       watchingSince: vendorRuntime.watchingSince,
       lastPollAt: vendorRuntime.lastPollAt,
@@ -4146,6 +4962,27 @@ async function getStatus() {
         error: vendorConfig.labelError,
       },
     },
+    vendorInviteGateway: {
+      enabled: vendorInviteConfig.enabled,
+      configured: vendorInviteConfigured,
+      watching: !!vendorInviteRuntime.pollTimer,
+      gatewayAddress: vendorInviteConfig.address || null,
+      mailboxUser: vendorInviteConfig.user || null,
+      mailbox: vendorInviteConfig.mailbox,
+      mailboxChannel: VENDOR_MAILBOX_CHANNELS.INVITE,
+      pollIntervalMs: vendorInviteConfig.pollIntervalMs,
+      watchingSince: vendorInviteRuntime.watchingSince,
+      lastPollAt: vendorInviteRuntime.lastPollAt,
+      lastPollDurationMs: vendorInviteRuntime.lastPollDurationMs,
+      lastConnectedAt: vendorInviteRuntime.lastConnectedAt,
+      lastError: vendorInviteLastError,
+      recentErrors: vendorInviteRuntime.recentErrors,
+      isPolling: vendorInviteRuntime.isPolling,
+      labels: {
+        processed: vendorInviteConfig.labelProcessed,
+        error: vendorInviteConfig.labelError,
+      },
+    },
   };
 }
 
@@ -4154,9 +4991,12 @@ async function getStatus() {
 const emailGateway = {
   runtime,
   vendorRuntime,
+  vendorInviteRuntime,
   INGESTION_OUTCOME,
   resolveConfig,
   resolveVendorConfig,
+  resolveVendorInviteConfig,
+  resolveVendorConfigs,
   isConfigured,
   describeConfigurationFault,
   resolveConnectionState,
@@ -4191,13 +5031,18 @@ const emailGateway = {
   pollViaGmailApi,
   pollVendorOnce,
   pollVendorViaGmailApi,
+  pollVendorInviteOnce,
+  pollVendorInviteViaGmailApi,
   pollBothInboxesOnce,
+  isInviteOnlyMailboxMessage,
+  processVendorInviteReply,
   startPolling,
   startBuyerPolling,
   startVendorPolling,
   stopPolling,
   getStatus,
   getOrCreateBuyerAccount,
+  isStrictBuyerRfqMailbox,
   normalizeRecipientList,
   resolveRegisteredBuyerAccount,
   resolveMultiBuyerAttribution,

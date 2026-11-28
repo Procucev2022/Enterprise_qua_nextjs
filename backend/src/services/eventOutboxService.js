@@ -25,6 +25,8 @@ const {
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
   EMAIL_REGEX,
   DAILY_RFQ_REPORT_CONFIG,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 
@@ -302,17 +304,34 @@ async function dispatchEvent(job, options = {}) {
         throw error;
       }
 
+      const isCmCreated = Boolean(
+        job.raw?.isCmCreated ||
+        vendor.isCmCreated ||
+        vendor.createdByCategoryManager ||
+        String(vendor.createdByRole || '').toLowerCase() === 'category_manager'
+      );
+      const mailboxChannel = job.raw?.mailboxChannel || (isCmCreated ? 'direct' : null);
       const emailPayload = mailerService.buildVendorOnboardingEmail({
         to: recipient,
         recipientName: vendor.contactPerson || vendor.name,
-        buyerOrganizationName: 'Procucev Enterprise',
+        buyerOrganizationName: isCmCreated
+          ? VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME
+          : (vendor.addedByBuyerCompany || 'Procucev Enterprise'),
         vendorCode: vendor.id,
         tempPassword,
         contactPhone: vendor.phone,
+        ...(isCmCreated ? { isCmCreated: true } : {}),
+        ...(mailboxChannel ? { mailboxChannel } : {}),
       });
       let delivery;
       try {
-        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+        delivery = mailboxChannel
+          ? await mailerService.sendVendorIngestionEmail(
+            emailPayload,
+            'onboarding',
+            { vendorChannel: mailboxChannel }
+          )
+          : await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       } catch {
         const error = new Error('Vendor onboarding email provider request failed.');
         error.code = 'VENDOR_ONBOARDING_EMAIL_FAILED';
@@ -774,6 +793,23 @@ async function dispatchEvent(job, options = {}) {
         error.code = 'INVALID_PERSISTED_RECORD';
         throw error;
       }
+      const inviteMessageId = target.inviteMessageId || (
+        rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+          ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, target.vendorId || target.vendor?.id || 'vendor')
+          : null
+      );
+      const invitedAt = new Date().toISOString();
+      const quotesDispatchDueAt = new Date(Date.parse(invitedAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString();
+      const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+        ? mailerService.resolveVendorInviteRouting(target.vendor, target, rfq)
+        : null;
+      const inviteChannel = target.inviteChannel || routing?.channel || null;
+      const inviteOrigin = target.inviteOrigin || routing?.origin || null;
+      const senderMailbox = target.senderMailbox || routing?.replyTo || null;
+      const replyToQuoteAllowed = typeof target.replyToQuoteAllowed === 'boolean'
+        ? target.replyToQuoteAllowed
+        : (typeof routing?.replyToQuoteAllowed === 'boolean' ? routing.replyToQuoteAllowed : null);
+
       const delivery = await mailerService.sendRfqInviteEmail(target.recipientEmail, {
         rfq,
         recipientName: target.recipientName,
@@ -781,13 +817,40 @@ async function dispatchEvent(job, options = {}) {
         freeCreditsRemaining: target.freeCreditsRemaining,
         isSubscribed: target.isSubscribed,
         isBuyerUploaded: target.isBuyerUploaded,
+        ...(typeof target.isCmAssigned === 'boolean' ? { isCmAssigned: target.isCmAssigned } : {}),
+        ...(typeof target.isCmCreated === 'boolean' ? { isCmCreated: target.isCmCreated } : {}),
+        ...(inviteChannel ? { inviteChannel, mailboxChannel: inviteChannel } : {}),
+        ...(inviteOrigin ? { inviteOrigin } : {}),
+        ...(senderMailbox ? { senderMailbox } : {}),
+        ...(typeof replyToQuoteAllowed === 'boolean' ? { replyToQuoteAllowed } : {}),
         vendor: target.vendor,
+        messageId: inviteMessageId,
       });
       if (!delivery?.sent) {
         const error = new Error('RFQ vendor invitation email provider did not accept the message.');
         error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
         throw error;
       }
+      await domainQueries.recordRfqVendorInviteInDB({
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: target.vendorId || target.vendor?.id || null,
+        vendorEmail: target.recipientEmail,
+        inviteMessageId: delivery.inviteMessageId || inviteMessageId || delivery.messageId || null,
+        invitedAt,
+        quotesDispatchDueAt,
+        inviteChannel,
+        inviteOrigin,
+        senderMailbox,
+        replyToQuoteAllowed,
+      }).catch((err) => {
+        logger.warn('Failed to persist RFQ vendor invite metadata after outbox dispatch', {
+          rfqId,
+          rfqNumber: rfq.rfqNumber,
+          vendorEmail: target.recipientEmail,
+          error: err.message,
+        }, 'EVENT_OUTBOX');
+      });
       logger.info('RFQ vendor invitation email accepted by a provider', {
         rfqId,
         rfqNumber: rfq.rfqNumber,

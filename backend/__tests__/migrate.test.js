@@ -379,6 +379,9 @@ describe('PostgreSQL migration runner', () => {
         '0039_vendor_email_search_indexes',
         '0040_notifications_and_category_indexes',
         '0041_user_preferences_and_upload_history',
+        '0042_v0_vendor_quote_tracking_and_dispatch',
+        '0043_rfq_vendor_invite_mailbox_tracking',
+        '0044_vendors_paid_subscription_index',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

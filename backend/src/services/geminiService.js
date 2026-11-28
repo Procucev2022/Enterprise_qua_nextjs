@@ -19,6 +19,7 @@
 
 const { GEMINI_CONFIG, GEMINI_INLINE_MIME_TYPES } = require('../config/constants');
 const { sanitizeTextForModel } = require('./documentTextSanitizer');
+const quoteDocumentExtractor = require('./quoteDocumentExtractor');
 const { logger } = require('./loggerService');
 const {
   normalizeAmount,
@@ -2030,17 +2031,35 @@ async function extractLineItems(input = {}) {
  * @returns {Promise<{status: string, data: object|null, model: string|null, error: string|null}>}
  */
 async function generateJson(input = {}) {
-  const { prompt, label = 'generation', budgetMs } = input;
+  const { prompt, inlineParts = [], label = 'generation', budgetMs } = input;
   checkDailyModelReset();
 
   const base = { data: null, model: null, error: null };
   const keys = resolveApiKeys();
+  const validInlineParts = Array.isArray(inlineParts)
+    ? inlineParts
+        .filter(
+          (part) =>
+            part &&
+            typeof part.data === 'string' &&
+            part.data.trim().length > 0 &&
+            typeof part.mimeType === 'string' &&
+            GEMINI_INLINE_MIME_TYPES.includes(part.mimeType.toLowerCase())
+        )
+        .map((part) => ({
+          inline_data: {
+            mime_type: part.mimeType.toLowerCase(),
+            data: part.data,
+          },
+        }))
+    : [];
 
   logger.info(
     `[GEMINI] Initiating generateJson for "${label}"`,
     {
       label,
       promptChars: typeof prompt === 'string' ? prompt.length : 0,
+      inlinePartsCount: validInlineParts.length,
       configuredKeysCount: keys.length,
       activeModelIndex,
       primaryModel: GEMINI_CONFIG.PRIMARY_MODEL,
@@ -2058,7 +2077,12 @@ async function generateJson(input = {}) {
   }
 
   const requestBody = {
-    contents: [{ role: 'user', parts: [{ text: sanitizeTextForModel(prompt).text }] }],
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: sanitizeTextForModel(prompt).text }, ...validInlineParts],
+      },
+    ],
     generationConfig: {
       temperature: GEMINI_CONFIG.TEMPERATURE,
       response_mime_type: 'application/json',
@@ -2258,6 +2282,22 @@ async function extractQuotationFromEmail(input = {}, rfqContext = {}) {
     return quotationExtractionFailure(EXTRACTION_STATUS.NOT_CONFIGURED, QUOTATION_EXTRACTION_MESSAGES.NOT_CONFIGURED);
   }
 
+  let extractedAttachmentText = '';
+  let inlineParts = [];
+  let processedAttachments = [];
+  if (Array.isArray(input.attachments) && input.attachments.length > 0) {
+    try {
+      const parsedAttachments = quoteDocumentExtractor.extractVendorQuoteAttachments(input.attachments);
+      extractedAttachmentText = parsedAttachments.extractedText || '';
+      inlineParts = Array.isArray(parsedAttachments.inlineParts) ? parsedAttachments.inlineParts : [];
+      processedAttachments = Array.isArray(parsedAttachments.processedAttachments) ? parsedAttachments.processedAttachments : [];
+    } catch (attachErr) {
+      logger.warn('Quote attachment extraction failed; continuing with email text', {
+        error: attachErr.message,
+      }, 'GEMINI');
+    }
+  }
+
   const rfqSummary = {
     rfqNumber: rfqContext.rfqNumber || null,
     title: rfqContext.title || '',
@@ -2272,8 +2312,15 @@ async function extractQuotationFromEmail(input = {}, rfqContext = {}) {
     })),
   };
 
+  const attachmentSection = extractedAttachmentText
+    ? `\n\nATTACHED QUOTATION DOCUMENTS (PDF/Word/Excel/CSV):\n${extractedAttachmentText}`
+    : '';
+  const inlineAttachmentNote = inlineParts.length > 0
+    ? `\nAttached visual/PDF files provided inline: ${inlineParts.map((p) => p.fileName || p.mimeType).join(', ')}. Read pricing, quantities, taxes, lead time, and commercial terms from these attached documents as well as the email body.`
+    : '';
+
   const prompt = `You are an enterprise procurement bid extraction system.
-Analyze the following vendor email quotation response for the given RFQ and extract all commercial and technical bid parameters in strict JSON format.
+Analyze the following vendor email quotation response (and any attached quotation PDF, Word, Excel, CSV, or image documents) for the given RFQ and extract all commercial and technical bid parameters in strict JSON format.
 
 RFQ DETAILS:
 ${JSON.stringify(rfqSummary, null, 2)}
@@ -2282,7 +2329,7 @@ VENDOR EMAIL CONTENT:
 Subject: ${input.subject || ''}
 From: ${input.fromAddress || ''}
 Body:
-${text}
+${text}${attachmentSection}${inlineAttachmentNote}
 
 Extract and return ONLY a JSON object with this EXACT structure:
 {
@@ -2292,7 +2339,7 @@ Extract and return ONLY a JSON object with this EXACT structure:
   "warrantyYears": Number (warranty period in years, integer >= 0),
   "paymentTerms": "String (e.g. Net 30, 100% advance, 30 days against invoice, or as stated)",
   "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review', or null if not stated)",
-  "remarks": "String (any vendor notes, exclusions, or commercial conditions stated in the email)",
+  "remarks": "String (any vendor notes, exclusions, or commercial conditions stated in the email or attachments)",
   "taxes": Number (total tax or GST amount if stated, else null),
   "deliveryCharges": Number (freight or delivery charges if stated, else null),
   "deliveryDate": "String in YYYY-MM-DD if explicit delivery date is stated, else null",
@@ -2309,10 +2356,20 @@ Extract and return ONLY a JSON object with this EXACT structure:
   ]
 }
 
-If a value is not stated in the email, return null for it. Never estimate a value or substitute a default.
+If a value is not stated in the email or attachments, return null for it. Never estimate a value or substitute a default.
 Do NOT include markdown fences, prose or explanation outside the JSON object.`;
 
-  const result = await generateJson({ prompt, label: 'vendor-quote-extraction' });
+  if (processedAttachments.length > 0) {
+    logger.info('Prepared vendor quote attachments for AI extraction', {
+      rfqNumber: rfqContext.rfqNumber || null,
+      attachmentCount: processedAttachments.length,
+      formats: processedAttachments.map((a) => a.format),
+      inlinePartsCount: inlineParts.length,
+      extractedChars: extractedAttachmentText.length,
+    }, 'GEMINI');
+  }
+
+  const result = await generateJson({ prompt, inlineParts, label: 'vendor-quote-extraction' });
 
   if (result.status === EXTRACTION_STATUS.SUCCESS && result.data && typeof result.data === 'object') {
     const data = result.data;

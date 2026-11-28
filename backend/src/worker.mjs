@@ -184,6 +184,9 @@ async function scheduled(controller, workerEnv, ctx) {
       () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
       () => rfqChaserScheduler.dispatchDueChaserJobs(),
       () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+      ...(typeof rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs === 'function'
+        ? [() => rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs()]
+        : []),
       () => storeService.closeExpiredRFQsDurably(),
       () => emailGatewayService.pollBothInboxesOnce(undefined, undefined, { ensureHydrated: hydrate }),
     ]);
@@ -212,6 +215,9 @@ async function scheduled(controller, workerEnv, ctx) {
     () => zohoReconciliationService.reconcileOnce(),
     () => rfqChaserScheduler.dispatchDueChaserJobs(),
     () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+    ...(typeof rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs === 'function'
+      ? [() => rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs()]
+      : []),
     () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
     () => eventOutboxService.purgeExpiredEventOutboxRows(),
     () => storeService.closeExpiredRFQsDurably(),

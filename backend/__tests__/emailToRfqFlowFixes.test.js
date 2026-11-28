@@ -810,16 +810,24 @@ describe('acknowledgements that could not be sent are retried later', () => {
     const result = await emailGatewayService.processMessage(raw(), config());
 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
-    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: `${MESSAGE_ID}#rfq-0#ack`,
-        status: INGESTION_OUTCOME.ACK_PENDING,
-        fromAddress: SENDER,
-        rfqNumber: 'RFQ-Q',
-        subject: 'Pumps',
-        detail: JSON.stringify({ buyerName: 'Test Heavy Engineering', rfqTitle: 'Pumps' }),
-      })
+    const ackCall = emailGatewayQueries.recordProcessed.mock.calls.find(
+      ([entry]) => entry.messageId === `${MESSAGE_ID}#rfq-0#ack`
     );
+    expect(ackCall).toBeDefined();
+    expect(ackCall[0]).toMatchObject({
+      messageId: `${MESSAGE_ID}#rfq-0#ack`,
+      status: INGESTION_OUTCOME.ACK_PENDING,
+      fromAddress: SENDER,
+      rfqId: 'rfq-q',
+      rfqNumber: 'RFQ-Q',
+      subject: 'Pumps',
+    });
+    expect(JSON.parse(ackCall[0].detail)).toMatchObject({
+      buyerName: 'Test Heavy Engineering',
+      rfqTitle: 'Pumps',
+      suppliersInvited: 0,
+      itemCount: 0,
+    });
     expect(emailGatewayQueries.releaseClaimedAcknowledgement).toHaveBeenCalledWith(
       `${MESSAGE_ID}#rfq-0#ack`,
       'initial-dispatch-claim'
@@ -1286,6 +1294,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -1302,6 +1311,7 @@ describe('acknowledgements that could not be sent are retried later', () => {
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+          EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
           EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -1856,7 +1866,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockRejectedValue(new Error('Identity DB down'));
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-storage@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-storage@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });
@@ -1866,7 +1876,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ user: null });
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-nouser@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-nouser@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });
@@ -1879,7 +1889,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       });
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('vendor-sender@example.com')).rejects.toThrow(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('vendor-sender@example.com', { isStrictBuyerMailbox: true })).rejects.toThrow(
         'This sender address belongs to a vendor account and cannot create buyer RFQs.'
       );
     });
@@ -1893,7 +1903,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(new Error('Buyer account store write failed'));
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-stfail@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-stfail@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });
@@ -2059,6 +2069,163 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       await expect(emailGatewayService.processMessage(raw(), config())).rejects.toThrow(
         emailGatewayService.RetryableIngestionError
       );
+    });
+
+    test('retries legacy ACK_PENDING rows without suppliersInvited by hydrating from persisted RFQ', async () => {
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      const renderedMessages = [];
+      ack.mockImplementation(async (params) => {
+        const rendered = mailerService.buildRfqAcknowledgementEmail(params);
+        renderedMessages.push(rendered);
+        return { sent: true, status: 'sent', messageId: 'ack-hydrated-1' };
+      });
+
+      const legacyRow = {
+        retry_claim_token: 'legacy-claim-1',
+        message_id: '<legacy-ack-msg@mail.gmail.com>#rfq-0#ack',
+        rfq_id: null,
+        rfq_number: 'RFQ-LEGACY-01',
+        from_address: SENDER,
+        subject: 'Water Pump Requirement',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          buyerName: 'Veera',
+          rfqTitle: 'Industrial Water Pump',
+          deliveryDate: '2026-12-02',
+        }),
+      };
+
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([legacyRow]);
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValueOnce({
+        id: 'rfq-legacy-id',
+        rfqNumber: 'RFQ-LEGACY-01',
+        title: 'Industrial Water Pump',
+        category: 'Engineering Spares - Mechanical',
+        deliveryLocation: 'Bengaluru, Karnataka',
+        targetDeliveryDate: '2026-12-02',
+        deadline: '2026-12-02',
+        procucevVendorCount: 25,
+        assignedVendors: [{ id: 'v1' }, { id: 'v2' }],
+        extractedEntities: [
+          { itemName: 'Water Pump', technicalSpecs: '5 HP', quantity: 2, unit: 'Nos' },
+        ],
+      });
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValueOnce(true);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(domainQueries.getRFQByIdFromDB).toHaveBeenCalledWith('RFQ-LEGACY-01');
+      expect(renderedMessages[0]).toMatchObject({
+        to: SENDER,
+        subject: 'Congratulations, RFQ RFQ-LEGACY-01 is live. Qua AI is on it',
+      });
+      expect(renderedMessages[0].text).toContain('Suppliers invited: 2');
+    });
+
+    test('retries ACK_PENDING safely with storage when persisted RFQ lookup fails and preserves string counts', async () => {
+      jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
+      const renderedMessages = [];
+      ack.mockImplementation(async (params) => {
+        const rendered = mailerService.buildRfqAcknowledgementEmail(params);
+        renderedMessages.push(rendered);
+        return { sent: true, status: 'sent', messageId: 'ack-fallback-1' };
+      });
+
+      const missingRfqRow = {
+        retry_claim_token: 'claim-missing-rfq',
+        message_id: '<missing-rfq@mail.gmail.com>#rfq-0#ack',
+        rfq_id: null,
+        rfq_number: 'RFQ-MISSING-01',
+        from_address: SENDER,
+        subject: 'Missing RFQ Subject',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          buyerName: 'Buyer One',
+          rfqTitle: 'Missing RFQ Title',
+        }),
+      };
+      const stringCountRow = {
+        retry_claim_token: 'claim-string-count',
+        message_id: '<string-count@mail.gmail.com>#rfq-0#ack',
+        rfq_id: 'rfq-str-id',
+        rfq_number: 'RFQ-STR-01',
+        from_address: SENDER,
+        subject: 'Valves',
+        processed_at: new Date().toISOString(),
+        detail: JSON.stringify({
+          buyerName: 'Buyer Two',
+          rfqTitle: 'Valves',
+          suppliersInvited: '7',
+        }),
+      };
+
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([missingRfqRow, stringCountRow]);
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB')
+        .mockRejectedValueOnce(new Error('D1 read timeout'))
+        .mockResolvedValueOnce({
+          id: 'rfq-str-id',
+          rfqNumber: 'RFQ-STR-01',
+          category: 'Industrial Valves',
+          deliveryLocation: 'Pune',
+          targetDeliveryDate: '2026-12-05',
+          deadline: '2026-12-05',
+          items: [{ name: 'Gate Valve', description: 'PN16', qty: 4, uom: 'Nos' }],
+        });
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValue(true);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(outcome).toEqual({ sent: 2, abandoned: 0, stillPending: 0 });
+      expect(renderedMessages[0].text).toContain('Suppliers invited: 0');
+      expect(renderedMessages[1].text).toContain('Suppliers invited: 7');
+    });
+
+    test('hydrates onboarding acknowledgement retry metadata from persisted RFQ when detail omitted them', async () => {
+      process.env.AES_ENCRYPTION_KEY = 'onboarding-hydrate-test-key';
+      delete process.env.AES_SECRET_KEY;
+      const messageId = 'onboard-hydrate#rfq-0#ack';
+      const encryptedTempPassword = cryptoService.encrypt('TempPass@2026', {
+        additionalData: `email-gateway-ack:${messageId}`,
+      }).encoded;
+
+      jest.spyOn(emailGatewayQueries, 'claimPendingAcknowledgements').mockResolvedValueOnce([
+        {
+          retry_claim_token: 'claim-onboard-hydrate',
+          message_id: messageId,
+          rfq_id: 'rfq-onboard-1',
+          rfq_number: 'RFQ-ONB-01',
+          from_address: SENDER,
+          subject: 'Onboarding RFQ',
+          processed_at: new Date().toISOString(),
+          detail: JSON.stringify({
+            buyerName: 'New Email Buyer',
+            rfqTitle: 'Onboarding RFQ',
+            encryptedTempPassword,
+          }),
+        },
+      ]);
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValueOnce({
+        id: 'rfq-onboard-1',
+        rfqNumber: 'RFQ-ONB-01',
+        category: 'Packaging',
+        deliveryLocation: 'Hyderabad',
+        targetDeliveryDate: '2026-12-10',
+        deadline: '2026-12-10',
+        procucevVendorCount: 4,
+      });
+      const onboardSpy = jest.spyOn(mailerService, 'sendBuyerOnboardingWithRfqEmail').mockResolvedValueOnce({ sent: true });
+      jest.spyOn(emailGatewayQueries, 'completeClaimedAcknowledgement').mockResolvedValueOnce(true);
+
+      const outcome = await emailGatewayService.retryPendingAcknowledgements();
+
+      expect(outcome).toEqual({ sent: 1, abandoned: 0, stillPending: 0 });
+      expect(onboardSpy).toHaveBeenCalledWith(expect.objectContaining({
+        category: 'Packaging',
+        deliveryLocation: 'Hyderabad',
+        deliveryDate: '2026-12-10',
+        suppliersInvited: 4,
+      }));
     });
   });
 });

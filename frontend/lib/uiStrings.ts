@@ -1086,6 +1086,9 @@ export const UI_STRINGS = {
     shortlistAdjustedTitle: 'Shortlist Adjusted',
     shortlistMismatchNotice:
       '{count} vendor(s) have a category mismatch and were left out of this RFQ shortlist. Use the category update request on each of them to ask them to update their categories.',
+    vendorsSelectedSummary: '{selected} of {total} vendor(s) selected',
+    matchedVendorsSelectedSummary: '{selected} of {total} matched vendor(s) selected',
+    allMatchedVendorsDispatchNotice: 'All {count} category-matched vendors will receive this RFQ',
     itemsCount: '{count} items',
     /** Names of incomplete line items in the dispatch summary, e.g. "2 line item(s) incomplete". */
     lineItemsIncompleteLabel: '{count} line item(s) incomplete',

@@ -385,7 +385,6 @@ const RFQ_CLOSURE_MESSAGES = Object.freeze({
   CM_CLOSE_REASON: 'Closed by procurement team',
   VENDOR_NOTIFICATION_TITLE: 'RFQ Closed: {rfqNumber}',
   VENDOR_NOTIFICATION_MESSAGE: 'Requisition {rfqNumber} ({rfqTitle}) has been closed by the buyer. Bidding is now concluded and no further quotations will be accepted.',
-  VENDOR_EMAIL_SUBJECT: 'RFQ Closed: {rfqNumber}',
   VENDOR_SMS_MESSAGE: 'RFQ {rfqNumber} is closed by the buyer. Bidding is concluded.',
   VENDOR_WHATSAPP_MESSAGE: 'Update on RFQ {rfqNumber} ({rfqTitle}): This RFQ has been closed by the buyer. Bidding is now concluded and no further quotations are needed.',
 });
@@ -501,6 +500,7 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/bot',
     '/api/buyer-accounts/active',
     '/api/buyer-profile',
+    '/api/category-manager/dashboard',
     '/api/crypto',
     '/api/db',
     '/api/document-vault',
@@ -2000,18 +2000,73 @@ const GMAIL_GATEWAY_LABELS = Object.freeze({
   UNREAD: 'UNREAD',
 });
 
+const VENDOR_MAILBOX_CHANNELS = Object.freeze({
+  INVITE: 'invite',
+  DIRECT: 'direct',
+});
+
+const VENDOR_INVITE_ORIGINS = Object.freeze({
+  AUTO_MATCHED_NETWORK: 'auto_matched_network',
+  BUYER_UPLOADED: 'buyer_uploaded',
+  CM_ASSIGNED: 'cm_assigned',
+  CM_CREATED: 'cm_created',
+});
+
 const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_POLL_MS: 60000,
   MIN_POLL_MS: 30000,
   DEFAULT_MAX_PER_POLL: 10,
-  // Dedicated vendor quotation mailbox. Read from VENDOR_EMAIL_GATEWAY_ADDRESS (or
-  // VENDOR_EMAIL_GATEWAY_USER) at access time and never defaulted. An empty string means
-  // the vendor mailbox is not configured.
+  // Dual vendor mailboxes. Loaded dynamically from environment variables; never hardcoded.
+  get INVITE_ADDRESS() {
+    return String(process.env.VENDOR_INVITE_EMAIL_ADDRESS || '').trim();
+  },
+  get DIRECT_RFQ_ADDRESS() {
+    return String(process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS || '').trim();
+  },
+  // Dedicated vendor direct quotation mailbox. Read from VENDOR_DIRECT_RFQ_EMAIL_ADDRESS
+  // or legacy VENDOR_EMAIL_GATEWAY_ADDRESS / VENDOR_EMAIL_GATEWAY_USER at access time and
+  // never defaulted. An empty string means the vendor mailbox is not configured.
   get GATEWAY_ADDRESS() {
-    return String(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim();
+    return String(
+      process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+      process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+      process.env.VENDOR_EMAIL_GATEWAY_USER ||
+      ''
+    ).trim();
   },
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
+
+/**
+ * Returns configured vendor mailboxes loaded strictly from environment variables.
+ */
+function getConfiguredVendorMailboxes(env = process.env) {
+  const safeEnv = env || process.env || {};
+  const inviteAddress = String(
+    safeEnv.VENDOR_INVITE_EMAIL_ADDRESS ||
+    safeEnv.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+    ''
+  ).trim();
+  const directRfqAddress = String(
+    safeEnv.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+    safeEnv.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL ||
+    safeEnv.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    safeEnv.VENDOR_EMAIL_GATEWAY_USER ||
+    ''
+  ).trim();
+  return {
+    inviteAddress,
+    directRfqAddress,
+  };
+}
+
+const STRICT_BUYER_RFQ_MAILBOX = 'rfq@procucev.com';
+const STRICT_VENDOR_INVITATION_MAILBOX = 'invitations@procucev.com';
+const NON_BUYER_MAILBOX_BLOCKLIST = Object.freeze([
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  'gmtrfq@procucev.com',
+]);
+const V0_QUOTES_DISPATCH_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 // ==============================================================================
 // RFQ MULTI-CHANNEL CHASER TIMING (Version 1 / mode_1 flow)
@@ -2421,6 +2476,14 @@ const EMAIL_GATEWAY_MESSAGES = {
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
+  SKIPPED_NON_BUYER_MAILBOX: 'Email was not addressed directly to the buyer RFQ mailbox and was skipped.',
+  VENDOR_MISSING_RFQ_REFERENCE: 'Email from registered vendor {address} did not include a resolvable RFQ reference; buyer RFQ creation was blocked.',
+  VENDOR_NOT_INVITED_TO_RFQ: 'Vendor {address} was not invited to RFQ {rfqNumber}.',
+  VENDOR_INVITE_PORTAL_REDIRECT_DETAIL:
+    'Reply to network invitation mailbox for RFQ {rfqNumber} declined for email quoting; portal submission link dispatched to {address}.',
+  VENDOR_INVITE_NO_RFQ:
+    'Network invitation mailbox requires a valid RFQ reference and only accepts quote submissions through the Procucev portal.',
+  EXISTING_VENDOR_BLOCKED: 'This sender address belongs to a vendor account and cannot create buyer RFQs.',
   CREDITS_EXHAUSTED_DETAIL: 'Quotation email from {vendorName} for RFQ {rfqNumber} acknowledged: 5 free quotation credits exhausted. Subscription upgrade email sent.',
   CREDITS_EXHAUSTED_SUBJECT: 'Action Required – Upgrade Plan to Submit Quotation for RFQ {rfqNumber}',
   // Gemini being rate-limited, erroring or unconfigured says nothing about the
@@ -2437,12 +2500,35 @@ const EMAIL_GATEWAY_DELIVERY_KIND = Object.freeze({
   VENDOR_CREDITS_EXHAUSTED: 'VENDOR_CREDITS_EXHAUSTED',
   VENDOR_QUOTE_FAILURE: 'VENDOR_QUOTE_FAILURE',
   VENDOR_PORTAL_REDIRECT: 'VENDOR_PORTAL_REDIRECT',
+  VENDOR_INVITE_PORTAL_REDIRECT: 'VENDOR_INVITE_PORTAL_REDIRECT',
   BUYER_UNAUTHORIZED_SENDER: 'BUYER_UNAUTHORIZED_SENDER',
   VENDOR_UNAUTHORIZED_SENDER: 'VENDOR_UNAUTHORIZED_SENDER',
   VENDOR_QUOTE_ACK: 'VENDOR_QUOTE_ACK',
   VENDOR_INQUIRY_ACK: 'VENDOR_INQUIRY_ACK',
   BUYER_QUOTE_RECEIVED: 'BUYER_QUOTE_RECEIVED',
   BUYER_PROFILE_COMPLETION_REMINDER: 'BUYER_PROFILE_COMPLETION_REMINDER',
+});
+
+const VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION = Object.freeze({
+  SUBJECT: 'Portal Submission Required – Download & Quote RFQ #{rfqNumber} in Procucev',
+  SUBJECT_FALLBACK: 'Portal Submission Required – Submit Your Quotation in Procucev',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Submit Your Quotation in the Portal',
+  BUTTON_REGISTERED: 'Download RFQ & Submit Quote in Portal',
+  BUTTON_UNREGISTERED: 'Activate Account, Download RFQ & Quote in Portal',
+  PORTAL_ONLY_NOTICE:
+    'Direct email quotation replies are not enabled for Procucev Network invitations. No quotation or bid has been recorded from your email reply.',
+  PORTAL_ACTION_INSTRUCTION:
+    'Please open the Procucev Vendor Portal using the link below to download the complete RFQ specifications and submit your quotation directly.',
+});
+
+const VENDOR_CM_ONBOARDING_NOTIFICATION = Object.freeze({
+  SUBJECT: '[Action Required] Welcome to Procucev – Your Vendor Account Login Credentials',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Category Manager Supplier Onboarding & Credentials',
+  DEFAULT_ORGANIZATION_NAME: 'Procucev Category Management',
+  CHANGE_PASSWORD_NOTE:
+    'Please sign in at the portal link above and change your temporary password immediately after logging in.',
 });
 
 /**
@@ -4217,9 +4303,24 @@ const RFQ_ATTACHMENT_EXTENSION_MIME_MAP = Object.freeze({
   '.tsv': 'text/tab-separated-values',
   '.json': 'application/json',
   '.doc': 'application/msword',
+  '.docm': 'application/vnd.ms-word.document.macroenabled.12',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xls': 'application/vnd.ms-excel',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroenabled.12',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+});
+
+const QUOTE_DOCUMENT_EXTRACTOR_CONFIG = Object.freeze({
+  MAX_ATTACHMENTS: 10,
+  MAX_INLINE_PARTS: 3,
+  MAX_ZIP_ENTRIES: 80,
+  MAX_UNCOMPRESSED_ENTRY_BYTES: 8 * 1024 * 1024,
+  MAX_TOTAL_UNCOMPRESSED_BYTES: 20 * 1024 * 1024,
+  MAX_TEXT_CHARS: Number(process.env.QUOTE_ATTACHMENT_MAX_TEXT_CHARS || 60000),
+  MAX_PDF_STREAM_BYTES: 2 * 1024 * 1024,
+  MAX_OLE2_STREAM_BYTES: 12 * 1024 * 1024,
+  MAX_OLE2_SECTORS: 32768,
+  OLE2_MAX_CHAIN_STEPS: 65536,
 });
 
 /**
@@ -4582,6 +4683,7 @@ module.exports = {
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
   RFQ_ATTACHMENT_EXTENSION_MIME_MAP,
+  QUOTE_DOCUMENT_EXTRACTOR_CONFIG,
   resolveAttachmentContentType,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
@@ -4592,9 +4694,14 @@ module.exports = {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_ORIGINS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
+  getConfiguredVendorMailboxes,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_DELIVERY_KIND,
+  VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
   UNAUTHORIZED_BUYER_NOTIFICATION,
@@ -4705,6 +4812,10 @@ module.exports = {
   isRfqConcluded,
   resolveRfqBiddingWindowEndMs,
   RFQ_CLOSURE_MESSAGES,
+  STRICT_BUYER_RFQ_MAILBOX,
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  NON_BUYER_MAILBOX_BLOCKLIST,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,

@@ -22,7 +22,6 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
-  Download,
   AlertCircle,
   TrendingUp,
   Settings,
@@ -80,7 +79,6 @@ import {
   BUYER_DIRECTORY_COLUMN_PREF_KEY,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { exportReportToExcel } from '@/lib/reportsClient';
 import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 
 interface BuyersDirectoryProps {
@@ -713,30 +711,6 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     }
   };
 
-  const handleExportDirectory = useCallback(() => {
-    const rows = sortedBuyers.map((b) => {
-      const metrics = buyerMetricsMap.get(b.id);
-      const rfqCount = metrics?.rfqCount ?? (b.totalRFQsCreated || 0);
-      const spendNumeric = metrics?.spendNumeric ?? 0;
-      const spendDisplay = spendNumeric > 0 ? formatCurrency(spendNumeric) : String(b.totalSpend || '₹0').replace('$', '₹');
-      return {
-        OrganizationName: b.organizationName,
-        ContactPerson: b.contactPerson || '',
-        Email: b.corporateEmail,
-        ...(b.mobileNumber ? { Phone: b.mobileNumber } : {}),
-        City: b.city || '',
-        PlantLocation: b.primaryPlantLocation || '',
-        SourcingMode: RFQ_MODE_LABELS[b.sourcingMode] || 'Mode 0',
-        Plan: b.subscriptionPlan || 'standard',
-        RemainingFreeRFQs: b.remainingFreeRFQs ?? 5,
-        TotalRFQsCreated: rfqCount,
-        TotalSpend: spendDisplay,
-        Status: b.status || 'ACTIVE',
-      };
-    });
-    exportReportToExcel(rows, `Buyers_Directory_${new Date().toISOString().split('T')[0]}`, 'BuyersDirectory');
-  }, [sortedBuyers, buyerMetricsMap]);
-
   // Handle column header sort click
   const handleSortClick = (key: BuyerDirectoryColumnKey) => {
     if (key === 'actions') return;
@@ -928,16 +902,8 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
           <option value="Email">{UI_STRINGS.buyerDirectory.sourceEmail}</option>
         </select>
 
-        {/* Export Directory and Gear icon aligned to right */}
+        {/* Gear icon aligned to right */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleExportDirectory}
-            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export Directory</span>
-          </button>
-
           <button
             type="button"
             onClick={() => setShowColumnSettings(true)}

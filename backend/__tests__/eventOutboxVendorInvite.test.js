@@ -181,4 +181,58 @@ describe('durable RFQ vendor invitation delivery', () => {
       ids: allIds.slice(EVENT_OUTBOX_MAX_BATCH_SIZE),
     }));
   });
+
+  test('derives fallback Message-ID / vendorId and tolerates recordRfqVendorInviteInDB failure', async () => {
+    const targetWithExplicitId = {
+      ...validTarget,
+      key: '3333333333333333333333333333333333333333333333333333333333333333',
+      vendorId: undefined,
+      inviteMessageId: '<explicit-outbox-id@procucev.com>',
+      vendor: { source: 'platform' },
+    };
+    claim({ rfqId: 'rfq-fallback-1', target: targetWithExplicitId });
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: 'rfq-fallback-1', rfqNumber: '' });
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true, messageId: '<provider-msg@procucev.com>' });
+    const recordSpy = jest.spyOn(domainQueries, 'recordRfqVendorInviteInDB').mockRejectedValueOnce(new Error('invite write error'));
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+      vendorId: null,
+      inviteMessageId: '<explicit-outbox-id@procucev.com>',
+    }));
+
+    const targetNoMsgId = {
+      ...validTarget,
+      key: '4444444444444444444444444444444444444444444444444444444444444444',
+      vendorId: undefined,
+      vendor: { id: 'v-sub-4' },
+    };
+    claim({ rfqId: 'rfq-fallback-2', target: targetNoMsgId });
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: 'rfq-fallback-2', rfqNumber: '' });
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    const recordSpy2 = jest.spyOn(domainQueries, 'recordRfqVendorInviteInDB').mockResolvedValueOnce({});
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(recordSpy2).toHaveBeenCalledWith(expect.objectContaining({
+      vendorId: 'v-sub-4',
+      inviteMessageId: null,
+    }));
+
+    const targetVendorFallback = {
+      ...validTarget,
+      key: '5555555555555555555555555555555555555555555555555555555555555555',
+      vendorId: undefined,
+      vendor: { source: 'platform' },
+    };
+    claim({ rfqId: 'rfq-fallback-3', target: targetVendorFallback });
+    jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue({ id: 'rfq-fallback-3', rfqNumber: 'RFQ-OUTBOX-3' });
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true, inviteMessageId: '<invite-outbox-3@procucev.com>' });
+    const recordSpy3 = jest.spyOn(domainQueries, 'recordRfqVendorInviteInDB').mockResolvedValueOnce({});
+
+    await expect(eventOutboxService.dispatchDueEventOutboxJobs(1)).resolves.toMatchObject({ completed: 1 });
+    expect(recordSpy3).toHaveBeenCalledWith(expect.objectContaining({
+      vendorId: null,
+      inviteMessageId: '<invite-outbox-3@procucev.com>',
+    }));
+  });
 });
