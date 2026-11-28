@@ -1768,44 +1768,81 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorIds([]);
   };
 
-  // Horizontal Scroller synchronization for in-slot navigation
+  // Horizontal & Firefox-synced vertical scroller synchronization for in-slot navigation
   const topScrollRef = useRef<HTMLDivElement>(null);
+  const verticalScrollRef = useRef<HTMLDivElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const isSyncingScroll = useRef(false);
+  const isSyncingVerticalScroll = useRef(false);
   const [tableScrollWidth, setTableScrollWidth] = useState(2260);
+  const [tableScrollHeight, setTableScrollHeight] = useState(0);
+  const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false);
+
+  const syncScrollPosition = (
+    lockRef: React.MutableRefObject<boolean>,
+    source: HTMLDivElement | null,
+    target: HTMLDivElement | null,
+    axis: 'scrollLeft' | 'scrollTop'
+  ) => {
+    if (lockRef.current || !source || !target) return;
+    lockRef.current = true;
+    target[axis] = source[axis];
+    requestAnimationFrame(() => {
+      lockRef.current = false;
+    });
+  };
 
   const handleTopScroll = () => {
-    if (isSyncingScroll.current) return;
-    isSyncingScroll.current = true;
-    if (tableContainerRef.current && topScrollRef.current) {
-      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
-    }
-    requestAnimationFrame(() => {
-      isSyncingScroll.current = false;
-    });
+    syncScrollPosition(isSyncingScroll, topScrollRef.current, tableContainerRef.current, 'scrollLeft');
+  };
+
+  const handleVerticalScroll = () => {
+    syncScrollPosition(isSyncingVerticalScroll, verticalScrollRef.current, tableContainerRef.current, 'scrollTop');
   };
 
   const handleTableScroll = () => {
-    if (isSyncingScroll.current) return;
-    isSyncingScroll.current = true;
-    if (topScrollRef.current && tableContainerRef.current) {
-      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
-    }
-    requestAnimationFrame(() => {
-      isSyncingScroll.current = false;
-    });
+    syncScrollPosition(isSyncingScroll, tableContainerRef.current, topScrollRef.current, 'scrollLeft');
+    syncScrollPosition(isSyncingVerticalScroll, tableContainerRef.current, verticalScrollRef.current, 'scrollTop');
   };
 
   useEffect(() => {
-    const updateWidth = () => {
-      if (tableContainerRef.current) {
-        setTableScrollWidth(tableContainerRef.current.scrollWidth);
+    const el = tableContainerRef.current;
+    const updateScrollMetrics = () => {
+      if (!tableContainerRef.current) return;
+      const { scrollWidth, scrollHeight, clientHeight } = tableContainerRef.current;
+      setTableScrollWidth(scrollWidth);
+      setTableScrollHeight(scrollHeight);
+      setHasVerticalOverflow(scrollHeight > clientHeight);
+    };
+    updateScrollMetrics();
+    window.addEventListener('resize', updateScrollMetrics);
+    let observer: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateScrollMetrics);
+      observer.observe(el);
+    }
+    return () => {
+      window.removeEventListener('resize', updateScrollMetrics);
+      observer?.disconnect();
+    };
+  }, [vendorColumns, buyerFilteredVendors]);
+
+  // Ensure Shift + mouse wheel scrolls horizontally even in browsers (e.g. Firefox)
+  // that do not translate vertical wheel deltas into deltaX when Shift is held.
+  const hasTableRows = buyerFilteredVendors.length > 0;
+  useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const handleShiftWheel = (event: WheelEvent) => {
+      if (event.shiftKey && event.deltaX === 0 && event.deltaY !== 0 && el.scrollWidth > el.clientWidth) {
+        event.preventDefault();
+        const step = event.deltaMode === 1 ? 16 : 1;
+        el.scrollLeft += event.deltaY * step;
       }
     };
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
-  }, [vendorColumns, buyerFilteredVendors]);
+    el.addEventListener('wheel', handleShiftWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleShiftWheel);
+  }, [hasTableRows]);
 
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
@@ -2469,27 +2506,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         {buyerFilteredVendors.length > 0 && (
           <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
             {/* Top horizontal scroller for immediate horizontal scroll without scrolling down */}
-            <div
-              ref={topScrollRef}
-              data-testid="vendor-directory-top-scroller"
-              onScroll={handleTopScroll}
-              className="w-full overflow-x-auto overflow-y-hidden border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-800/50 vendor-directory-table-scroll focus:outline-none"
-              style={{ height: '14px' }}
-              tabIndex={-1}
-              aria-hidden="true"
-            >
-              <div style={{ width: `${Math.max(tableScrollWidth, 2260)}px`, height: '1px' }} />
+            <div className="flex items-stretch w-full border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-800/50">
+              <div
+                ref={topScrollRef}
+                data-testid="vendor-directory-top-scroller"
+                onScroll={handleTopScroll}
+                className="w-full flex-1 min-w-0 overflow-x-auto overflow-y-hidden vendor-directory-table-scroll focus:outline-none"
+                style={{ height: '14px' }}
+                tabIndex={-1}
+                aria-hidden="true"
+              >
+                <div style={{ width: `${Math.max(tableScrollWidth, 2260)}px`, height: '1px' }} />
+              </div>
+              {hasVerticalOverflow && (
+                <div
+                  className="w-[14px] shrink-0 border-l border-slate-200 dark:border-gray-800 vendor-directory-firefox-corner"
+                  style={{ height: '14px' }}
+                  aria-hidden="true"
+                />
+              )}
             </div>
 
-            <div
-              ref={tableContainerRef}
-              onScroll={handleTableScroll}
-              data-testid="vendor-directory-table-container"
-              className="w-full max-w-full overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto vendor-directory-table-scroll vendor-directory-main-scroll focus:outline-none"
-              tabIndex={0}
-              role="region"
-              aria-label="Vendor Directory Table"
-            >
+            <div className="flex items-stretch w-full">
+              <div
+                ref={tableContainerRef}
+                onScroll={handleTableScroll}
+                data-testid="vendor-directory-table-container"
+                className="w-full flex-1 min-w-0 max-w-full overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto vendor-directory-table-scroll vendor-directory-main-scroll focus:outline-none"
+                tabIndex={0}
+                role="region"
+                aria-label="Vendor Directory Table"
+              >
               <table className="w-full text-left text-xs border-collapse min-w-[2260px]">
                 <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-gray-800 shadow-xs">
                   <tr className="bg-slate-50 dark:bg-gray-800/90 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
@@ -2616,6 +2663,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   {buyerFilteredVendors.map(renderVendorCard)}
                 </tbody>
               </table>
+              </div>
+              {hasVerticalOverflow && (
+                <div
+                  ref={verticalScrollRef}
+                  data-testid="vendor-directory-vertical-scroller"
+                  onScroll={handleVerticalScroll}
+                  className="w-[14px] shrink-0 max-h-[calc(100vh-280px)] border-l border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-800/50 vendor-directory-table-scroll vendor-directory-firefox-vscroll focus:outline-none"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                >
+                  <div style={{ width: '1px', height: `${tableScrollHeight}px` }} />
+                </div>
+              )}
             </div>
           </div>
         )}

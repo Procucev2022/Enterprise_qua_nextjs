@@ -121,7 +121,7 @@ Formatting & ES6+: Enforce single quotes, semi (colons), and comma-dangle. Requi
 **Timestamp**: 2026-08-30T04:42:36Z
 
 ```text
-Pre-commits check: Add assistant instructions to run git pre-commit hooks that execute all quality checksΓÇösuch as linting, typechecking, building, and running testsΓÇöbefore allowing any commit.
+Pre-commits check: Add assistant instructions to run git pre-commit hooks that execute all quality checksÎÃÃ¶such as linting, typechecking, building, and running testsÎÃÃ¶before allowing any commit.
 ```
 
 ---
@@ -171,7 +171,7 @@ AES Encryption: Incorporate AES encryption algorithms to guarantee the protectio
 **Timestamp**: 2026-08-30T08:29:02Z
 
 ```text
-User Prompt History: Add configuration in assistant instructions to maintain a file in workspace ΓÇ£prompts.mdΓÇ¥ for saving user provided prompts. Save only user provided prompts in a file named prompts.md. Not AI generated conversations.
+User Prompt History: Add configuration in assistant instructions to maintain a file in workspace ÎÃÂ£prompts.mdÎÃÂ¥ for saving user provided prompts. Save only user provided prompts in a file named prompts.md. Not AI generated conversations.
 
 
 Logs Storage: Implement a structured and centralized logging system for persistence, searchability, and automatic purging to manage storage and compliance. In case the code is running locally, store all logs in the file system for future reference and debugging.
@@ -201,7 +201,7 @@ Additionally, implement optimizations to minimize database compute hours, reduce
 ```text
 Please implement the existing Buyer Profile functionality from the old repository into the new repository.
 
-Old repositories ΓÇö use these only as a reference for functionality, API flow, login/authentication, business logic, and existing Buyer Profile behavior:
+Old repositories ÎÃÃ¶ use these only as a reference for functionality, API flow, login/authentication, business logic, and existing Buyer Profile behavior:
 
 Old Frontend:
 `C:\Users\navin\OneDrive\Desktop\procucev\p2pui_v1`
@@ -325,7 +325,7 @@ raise the pr
 **Timestamp**: 2026-11-01T14:14:16Z
 
 ```text
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR implements multi-channel SMS and Email integration for the Action Center. There is a potential correctness issue with the delivery status webhook updating unrelated communication records due to querying by accountId instead of a unique communication/transaction ID.
 What changedAdded DLT-compliant SMS and multi-transport Email backend services and routes.
@@ -338,7 +338,7 @@ const finalStatus = acknowledgementStatus || 'Acknowledged';
 const updated = await paymentDuesQueries.updateAcknowledgementStatus({
 [Procucev2022](https://github.com/Procucev2022)[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435434997)
 Owner
-🟠 HIGH · bug — Webhook updates records using accountId instead of communication ID
+ð  HIGH Â· bug â Webhook updates records using accountId instead of communication ID
 The delivery status webhook uses paymentDuesQueries.updateAcknowledgementStatus passing accountId. In systems where an entity (ticket/task) receives multiple communications over its lifecycle, updating by accountId will modify all communication records associated with that entity rather than the specific dispatched message instance, causing status corruption on historical logs.
 Suggested change
 const updated = await paymentDuesQueries.updateAcknowledgementStatus({
@@ -347,24 +347,24 @@ Reply...
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5727893238)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 Unauthenticated communication routes and unsigned webhooks allow unauthorized messaging, access to private data, and tampering with communication records.
-16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) · New
-[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) · New
-[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) · New
-[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) · New
-[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) · New
-[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) · New
-[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) · New
-[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) · New
-[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) · New
-[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) · New
-[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) · New
-[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) · New
-[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) · New
-[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) · New
-[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) · New
-[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) · New
+16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) Â· New
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) Â· New
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) Â· New
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) Â· New
+[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) Â· New
+[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) Â· New
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) Â· New
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) Â· New
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) Â· New
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) Â· New
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) Â· New
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) Â· New
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) Â· New
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) Â· New
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) Â· New
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) Â· New
 What changed in this PRAdds SMS and email communications to the Action Center, reusing existing mail, SMS, communication-history and internal-task services.
 Changes:
 Adds dispatch, history and delivery-webhook endpoints, plus Action Center SMS template configuration.
@@ -445,7 +445,7 @@ Reply...
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [backend/src/config/validationSchemas.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-1ff9332560c5cf5b812e807cfdfca48806ca570b98fa4c22e9802b5b728fd6a9)Resolved
-6 hidden conversationsLoad more…
+6 hidden conversationsLoad moreâ¦
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Outdated
 records = await paymentDuesQueries.getCommunicationHistory(entityId);
 } else {
@@ -474,7 +474,7 @@ Copilot uses AI. Check for mistakes.
 Reply...
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
-[github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#issuecomment-6557503587)•
+[github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#issuecomment-6557503587)â¢
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: PASSED
 292 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -550,7 +550,7 @@ PASSED
 [Procucev2022](https://github.com/Procucev2022) reviewed [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728005075)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces comprehensive SMS & Email Action Center communication features with DLT integration, controllers, and frontend modal components. One security and correctness issue was identified regarding unauthenticated webhook ingestion.
 What changedAdded Action Center notification services and REST endpoints for multi-channel dispatch.
@@ -563,7 +563,7 @@ router.get('/', optionalAuthenticate, actionCenterCommController.getCommunicatio
 router.post('/webhook', actionCenterCommController.handleDeliveryWebhook);
 [Procucev2022](https://github.com/Procucev2022)[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435557479)
 Owner
-🟠 HIGH · security — Unauthenticated Webhook Endpoint
+ð  HIGH Â· security â Unauthenticated Webhook Endpoint
 The delivery status webhook route does not apply authentication middleware. In a production environment, this allows unauthenticated external callers to forge delivery status updates or inject arbitrary status payloads into the database.
 Suggested change
 router.post('/webhook', actionCenterCommController.handleDeliveryWebhook);
@@ -573,18 +573,18 @@ Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextj
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728045803)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 Missing authentication and authorization on dispatch and history endpoints, plus unverified webhooks, allow arbitrary messaging, exposure of private communications, and falsification of audit records.
-22 open issues [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396) ·标识New
-[Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421) · New
+22 open issues [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396) Â·æ è¯New
+[Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421) Â· New
 [Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938)
 [Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932)
 [Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
 [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882)
-[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438) · New
-[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452) · New
-[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471) · New
-[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487) · New
+[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438) Â· New
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452) Â· New
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471) Â· New
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487) Â· New
 [Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113)
 [Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098)
 [Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
@@ -620,7 +620,7 @@ CopilotAI
 [1h ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
 Medium
 Track transport results and persist actual delivery state
-The email and SMS sends are fire-and-forget and discard resolved failure results ({ sent: false } / { success: false }), so failed sends leave the record marked Delivered and the API reports success. Untracked sends can also be cancelled after the Cloudflare Worker response ends; the SMS branch at lines 895–900 has the same issue. Await and check both transport results, or enqueue tracked delivery, then persist and report the actual dispatch outcome.
+The email and SMS sends are fire-and-forget and discard resolved failure results ({ sent: false } / { success: false }), so failed sends leave the record marked Delivered and the API reports success. Untracked sends can also be cancelled after the Cloudflare Worker response ends; the SMS branch at lines 895â900 has the same issue. Await and check both transport results, or enqueue tracked delivery, then persist and report the actual dispatch outcome.
 Copilot uses AI. Check for mistakes.
 Reply...
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)
@@ -648,14 +648,14 @@ Associate dispatches with the selected task
 Every dispatch from the task dashboard is attached to the literal general-task, not an actual task ID, and the modal has no way to select the intended task. The service uses this value for both communication history and follow-up task links, so notifications for unrelated tasks are merged under a nonexistent entity and cannot be retrieved by their real task IDs. Open compose for a selected task or require a task selection before dispatching.
 Copilot uses AI. Check for mistakes.
 Reply...
-[fix(action-center): resolve AI code review findings, webhook auth, HT…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
+[fix(action-center): resolve AI code review findings, webhook auth, HTâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
 [9228654](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [44 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833242282)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/08d98445-ee6d-45f8-a2c3-a94944af9670) on behalf of [Procucev2022](https://github.com/Procucev2022) [44 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833258660)
 [Procucev2022](https://github.com/Procucev2022) reviewed [44 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728280765)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces multi-channel SMS and Email communication via a DLT telecom gateway into the Action Center, complete with controllers, notification services, database queries, and a React compose modal. One critical security flaw was identified in the webhook authentication handler.
 What changedAdded backend controllers and services for SMS and Email dispatch
@@ -669,24 +669,24 @@ return { valid: false, error: 'Missing webhook authentication signature.' };
 if (providedSecret !== expectedSecret) {
 [Procucev2022](https://github.com/Procucev2022)[44 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435820093)
 Owner
-🔴 CRITICAL · security — Timing Attack Vulnerability in Webhook Secret Verification
+ð´ CRITICAL Â· security â Timing Attack Vulnerability in Webhook Secret Verification
 Comparing secrets with standard equality operator (providedSecret !== expectedSecret) leaks timing information, allowing attackers to brute-force the webhook secret character by character. Use crypto.timingSafeEqual instead.
 Reply...
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [34 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728318370)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 A public fallback webhook secret and insufficient live-send authorization permit unauthorized updates and sends, while uncorrelated delivery callbacks can modify the wrong communication record.
-19 open issues [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744) · New
-[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781) · New
-[Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831) · New
+19 open issues [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744) Â· New
+[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781) Â· New
+[Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831) Â· New
 [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396)
 [Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
-[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891) · New
-[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953) · New
-[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994) · New
-[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034) · New
-[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064) · New
+[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891) Â· New
+[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953) Â· New
+[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994) Â· New
+[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034) Â· New
+[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064) Â· New
 [Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487)
 [Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471)
 [Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
@@ -809,7 +809,7 @@ CopilotAI
 [34m ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994)
 Medium
 Use the selected channel's recipient in the supplier composer
-Opening the existing SupplierDossierDrawer composer from its SMS sub-tab changes composeChannel but leaves composeRecipient initialized to seller.email (lines 370 and 1163–1172). That nonempty email overrides vendor.phone here, so the new live SMS dispatch fails for a supplier with both contacts unless the user manually corrects the recipient. Initialize and submit recipients according to the selected channel, and validate SMS destinations before dispatch.
+Opening the existing SupplierDossierDrawer composer from its SMS sub-tab changes composeChannel but leaves composeRecipient initialized to seller.email (lines 370 and 1163â1172). That nonempty email overrides vendor.phone here, so the new live SMS dispatch fails for a supplier with both contacts unless the user manually corrects the recipient. Initialize and submit recipients according to the selected channel, and validate SMS destinations before dispatch.
 This comment was generated using the github-mcp-server MCP.
 Reply...
 [backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)
@@ -850,14 +850,14 @@ setFormError(result.error || [result.emailResult?.error, result.smsResult?.error
 } catch {
 Copilot uses AI. Check for mistakes.
 Reply...
-[fix(action-center): use constant-time comparison for webhook secret v…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
+[fix(action-center): use constant-time comparison for webhook secret vâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
 [1327c82](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834266062)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/65f8de56-e590-4ab2-8ca9-d3076445d821) on behalf of [Procucev2022](https://github.com/Procucev2022) [21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834283845)
 [Procucev2022](https://github.com/Procucev2022) reviewed [19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728384552)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces SMS and Email integration for the Action Center, including DLT gateway compliance, backend controllers, validation, services, and frontend UI modals. Overall the code quality and test coverage are high, but there is one correctness issue with string replacement in the SMS template formatter.
 What changedAdded Action Center communication routes, controllers, and notification services.
@@ -871,13 +871,13 @@ const rawTemplate = templateConfig.TEMPLATE;
 const renderedMessage = rawTemplate.includes('{#alp#}')
 [Procucev2022](https://github.com/Procucev2022)[19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435921497)
 Owner
-🟠 HIGH · bug — String.prototype.replace only replaces the first occurrence
+ð  HIGH Â· bug â String.prototype.replace only replaces the first occurrence
 Using .replace('{#alp#}', ...) repeatedly only replaces the first occurrence of '{#alp#}' in the template. Subsequent instances of '{#alp#' will remain unreplaced, causing template rendering to output raw placeholder tokens in live SMS messages.
 Reply...
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [13 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728404670)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🔵 Needs a closer look
+ðµ Needs a closer look
 Unresolved critical issues permit forged webhook updates and unauthorized messaging, while failed or cancelled sends can still be reported as delivered.
 19 open issues [Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831)
 [Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781)
@@ -917,7 +917,7 @@ merge is not done because of Ai review please fix this
 **Timestamp**: 2026-11-02T10:18:45+05:30
 
 ```text
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR implements multi-channel SMS and Email integration for the Action Center. There is a potential correctness issue with the delivery status webhook updating unrelated communication records due to querying by accountId instead of a unique communication/transaction ID.
 What changedAdded DLT-compliant SMS and multi-transport Email backend services and routes.
@@ -928,24 +928,24 @@ Enforced test coverage gates.
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [17 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5727893238)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 Unauthenticated communication routes and unsigned webhooks allow unauthorized messaging, access to private data, and tampering with communication records.
-16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) · New
-[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) · New
-[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) · New
-[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) · New
-[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) · New
-[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) · New
-[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) · New
-[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) · New
-[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) · New
-[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) · New
-[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) · New
-[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) · New
-[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) · New
-[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) · New
-[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) · New
-[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) · New
+16 open issues [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882) Â· New
+[Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913) Â· New
+[Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932) Â· New
+[Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938) Â· New
+[Validate email addresses before dispatch](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453950) Â· New
+[Write dispatch events at the audit log level](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453963) Â· New
+[Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978) Â· New
+[Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999) Â· New
+[Await provider sends and record their actual outcomes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454012) Â· New
+[Record sends as dispatched until delivery is confirmed](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454024) Â· New
+[Surface follow-up creation failures as partial success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454035) Â· New
+[Support history queries without an entity ID](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454050) Â· New
+[Report cooldown-suppressed notifications as unsent](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454069) Â· New
+[Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090) Â· New
+[Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098) Â· New
+[Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113) Â· New
 What changed in this PRAdds SMS and email communications to the Action Center, reusing existing mail, SMS, communication-history and internal-task services.
 Changes:
 Adds dispatch, history and delivery-webhook endpoints, plus Action Center SMS template configuration.
@@ -1015,13 +1015,13 @@ Review effort: Balanced
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [backend/src/config/validationSchemas.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-1ff9332560c5cf5b812e807cfdfca48806ca570b98fa4c22e9802b5b728fd6a9)Resolved
-6 hidden conversationsLoad more…
+6 hidden conversationsLoad moreâ¦
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
 [backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/2646cfc1af1780c5080dc1fa4836bc8ad71ba2ee#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
-[github-actions](https://github.com/apps/github-actions) Botcommented[17 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#issuecomment-6557503587)•
+[github-actions](https://github.com/apps/github-actions) Botcommented[17 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#issuecomment-6557503587)â¢
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: PASSED
 292 / 292 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -1097,7 +1097,7 @@ PASSED
 [Procucev2022](https://github.com/Procucev2022) reviewed [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728005075)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces comprehensive SMS & Email Action Center communication features with DLT integration, controllers, and frontend modal components. One security and correctness issue was identified regarding unauthenticated webhook ingestion.
 What changedAdded Action Center notification services and REST endpoints for multi-channel dispatch.
@@ -1109,18 +1109,18 @@ Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextj
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728045803)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 Missing authentication and authorization on dispatch and history endpoints, plus unverified webhooks, allow arbitrary messaging, exposure of private communications, and falsification of audit records.
-22 open issues [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396) · New
-[Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421) · New
+22 open issues [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396) Â· New
+[Remove conflicting fixed-date test changes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595421) Â· New
 [Check the mailer result object before reporting success](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453938)
 [Escape email content and validate action URLs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453932)
 [Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
 [Require authenticated, authorized access to dispatch and history routes](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453882)
-[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438) · New
-[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452) · New
-[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471) · New
-[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487) · New
+[Resolve the dispatch actor ID from the JWT subject](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595438) Â· New
+[Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452) Â· New
+[Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471) Â· New
+[Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487) Â· New
 [Require a due date when follow-up scheduling is enabled](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454113)
 [Show per-channel results for partial dispatch failures](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454098)
 [Prevent silent truncation of accepted SMS messages](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435454090)
@@ -1139,14 +1139,14 @@ Review effort: Balanced
 [backend/src/controllers/buyerAccountController.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-783e9a37f0be97d9bc092d4fb9e9ed77d0d1997a747e2e9cb4b39adae3bc59d6)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
 [frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/e0323cf8c137116933f0c9042299660ff004e6ba#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)Resolved
-[fix(action-center): resolve AI code review findings, webhook auth, HT…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
+[fix(action-center): resolve AI code review findings, webhook auth, HTâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
 [9228654](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9228654bbfde6c881284cc4849b36fae335d30c6)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833242282)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/08d98445-ee6d-45f8-a2c3-a94944af9670) on behalf of [Procucev2022](https://github.com/Procucev2022) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34833258660)
 [Procucev2022](https://github.com/Procucev2022) reviewed [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728280765)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces multi-channel SMS and Email communication via a DLT telecom gateway into the Action Center, complete with controllers, notification services, database queries, and a React compose modal. One critical security flaw was identified in the webhook authentication handler.
 What changedAdded backend controllers and services for SMS and Email dispatch
@@ -1158,18 +1158,18 @@ Added frontend compose modal and tests
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728318370)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 A public fallback webhook secret and insufficient live-send authorization permit unauthorized updates and sends, while uncorrelated delivery callbacks can modify the wrong communication record.
-19 open issues [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744) · New
-[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781) · New
-[Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831) · New
+19 open issues [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744) Â· New
+[Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781) Â· New
+[Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831) Â· New
 [Authenticate history access and enforce entity-level authorization](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595396)
 [Verify webhook authenticity before processing callbacks](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453913)
-[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891) · New
-[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953) · New
-[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994) · New
-[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034) · New
-[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064) · New
+[Pass the audit actor email in the expected argument position](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856891) Â· New
+[Surface follow-up scheduling failures to the client](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856953) Â· New
+[Use the selected channel's recipient in the supplier composer](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856994) Â· New
+[Persist the gateway message ID for receipt correlation](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857034) Â· New
+[Show per-channel errors when all notification sends fail](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435857064) Â· New
 [Associate dispatches with the selected task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595487)
 [Manage focus while the dialog is open](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595471)
 [Track transport results and persist actual delivery state](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435595452)
@@ -1199,14 +1199,14 @@ Review effort: Balanced
 [backend/src/controllers/vendorDossierExtensions.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-ec93ad7b930accfc234e5389977109ba7bdbc6553199b09dd99eaa65f1eb66e9)Resolved
 [backend/src/services/smsService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-2ba83ee0a8830b30d6fac70fd6498c6f665a14bea8008328f8eb79a8fde92fa5)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/9228654bbfde6c881284cc4849b36fae335d30c6#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
-[fix(action-center): use constant-time comparison for webhook secret v…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
+[fix(action-center): use constant-time comparison for webhook secret vâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
 [1327c82](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/1327c8278c6f02a2a4918434dd3d722bdf35b6b8)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834266062)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/65f8de56-e590-4ab2-8ca9-d3076445d821) on behalf of [Procucev2022](https://github.com/Procucev2022) [15 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34834283845)
 [Procucev2022](https://github.com/Procucev2022) reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728384552)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR introduces SMS and Email integration for the Action Center, including DLT gateway compliance, backend controllers, validation, services, and frontend UI modals. Overall the code quality and test coverage are high, but there is one correctness issue with string replacement in the SMS template formatter.
 What changedAdded Action Center communication routes, controllers, and notification services.
@@ -1217,7 +1217,7 @@ Implemented unit and integration tests covering new flows and error states.
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728404670)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🔵 Needs a closer look
+ðµ Needs a closer look
 Unresolved critical issues permit forged webhook updates and unauthorized messaging, while failed or cancelled sends can still be reported as delivered.
 19 open issues [Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831)
 [Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781)
@@ -1239,14 +1239,14 @@ Unresolved critical issues permit forged webhook updates and unauthorized messag
 [Initialize recipients according to the selected channel](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453999)
 [Correlate callbacks and update delivery status separately](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435453978)
 Review effort: Balanced
-[fix(action-center): resolve PR review comments, webhook security, and…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/b7d772f528addbea3a829340b399e59505cb4671)
+[fix(action-center): resolve PR review comments, webhook security, andâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/b7d772f528addbea3a829340b399e59505cb4671)
 [b7d772f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/b7d772f528addbea3a829340b399e59505cb4671)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34836290324)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/44cfb0b4-1a5c-474b-b6dc-6b90f135b8a5) on behalf of [Procucev2022](https://github.com/Procucev2022) [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34836310885)
 [Procucev2022](https://github.com/Procucev2022) reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728642457)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: high | Findings: 2
 The PR introduces SMS and Email integration via a DLT telecom gateway, compose modals, and audit trails. Most logic is well-tested, but there is an authentication vulnerability in the webhook endpoint and a missing input validation check for the channel field.
 What changedAdded Action Center communication routes and controller endpoints.
@@ -1258,18 +1258,18 @@ Added robust unit test suite covering new communications service and controllers
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [14 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728664038)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 The history endpoint permits anonymous cross-account access to message bodies, contacts, and notes, leaving a critical data-exposure vulnerability unresolved.
-10 open issues [Account-only callbacks can update the wrong communication](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090094) · New
-[Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127) · New
-[History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160) · New
-[Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184) · New
-[Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205) · New
-[Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229) · New
-[Valid +91 supplier numbers are replaced with the registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090250) · New
-[SMS-only composition records the hidden email as its recipient](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090276) · New
-[Retrying follow-up scheduling resends the already delivered message](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090308) · New
-[Task compose flow falls back to a nonexistent general-task entity](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090334) · New
+10 open issues [Account-only callbacks can update the wrong communication](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090094) Â· New
+[Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127) Â· New
+[History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160) Â· New
+[Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184) Â· New
+[Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205) Â· New
+[Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229) Â· New
+[Valid +91 supplier numbers are replaced with the registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090250) Â· New
+[SMS-only composition records the hidden email as its recipient](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090276) Â· New
+[Retrying follow-up scheduling resends the already delivered message](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090308) Â· New
+[Task compose flow falls back to a nonexistent general-task entity](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090334) Â· New
 19 resolved since last review [Apply filters and pagination before limiting communication history](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856831)
 [Restrict live sends to authorized staff or approved recipients](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856781)
 [Reject webhook requests when no secret is configured](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4435856744)
@@ -1300,14 +1300,14 @@ Review effort: Balanced
 [backend/src/services/actionCenterNotificationService.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-4d851c4ca92673a631b93b13fce618baccd86f8a2d5409c3b807c0af5dbeb176)Resolved
 [frontend/app/category-manager/components/ActionCenterComposeModal.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-3e91d4999a1e393e021324f94b7a92c95477dfe3f15a757cc9afe9f46cfd46fd)Resolved
 [frontend/app/category-manager/internal-tasks.tsx](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/b7d772f528addbea3a829340b399e59505cb4671#diff-38a098f4a7e29448aa22e740fb7831ff1100f4d8044e8ba4c8b96a2da166b38e)Resolved
-[fix(action-center): attach webhook auth middleware to route and valid…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9c6f534960e07352fd8bcbe2b7e947552e99fcf9)
+[fix(action-center): attach webhook auth middleware to route and validâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9c6f534960e07352fd8bcbe2b7e947552e99fcf9)
 [9c6f534](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/9c6f534960e07352fd8bcbe2b7e947552e99fcf9)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34837187450)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/ccf52fa4-6459-4640-a0b0-d9a66d9c47df) on behalf of [Procucev2022](https://github.com/Procucev2022) [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34837205906)
 [Procucev2022](https://github.com/Procucev2022) reviewed [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728710739)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: high | Findings: 2
 The PR introduces SMS and Email communication features via the DLT telecom gateway, along with compose modals and audit trails. Most tests and implementation details look solid, but there is a major security flaw in webhook handling where the controller evaluates verifyWebhookAuthenticity but fails to block requests when verifyWebhookSignature middleware isn't used, and a couple of input sanitization or edge-case handling bugs.
 What changedAdded DLT-compliant SMS and multi-transport email dispatch service and controller.
@@ -1319,7 +1319,7 @@ Enhanced buyer and supplier communication recording with external live dispatch.
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [13 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5728727237)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🔵 Needs a closer look
+ðµ Needs a closer look
 Unresolved critical flaws expose private cross-account communications to anonymous callers, route SMS to unintended recipients, and apply delivery receipts to the wrong messages.
 10 open issues [Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184)
 [History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160)
@@ -1332,14 +1332,14 @@ Unresolved critical flaws expose private cross-account communications to anonymo
 [Valid +91 recipients are replaced with the buyer's registered number](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090229)
 [Delivery-only callbacks incorrectly acknowledge communications](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090205)
 Review effort: Balanced
-[fix(action-center): resolve all AI Code Review and Copilot review com…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/ad0d61b23f52401d43778a2dedf4a2c65b22fc13)
+[fix(action-center): resolve all AI Code Review and Copilot review comâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/ad0d61b23f52401d43778a2dedf4a2c65b22fc13)
 [ad0d61b](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/commits/ad0d61b23f52401d43778a2dedf4a2c65b22fc13)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34874558908)
 Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextjs/sessions/798879e6-7042-49ed-af45-db3680515959) on behalf of [Procucev2022](https://github.com/Procucev2022) [19 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#event-34874580408)
 [Procucev2022](https://github.com/Procucev2022) reviewed [17 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732096549)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: high | Findings: 1
 The PR introduces SMS and Email integration for Action Center with DLT compliance, validation, audit logs, and controllers. Overall logic and tests look well-structured, but a critical SQL parameterization syntax bug was found in the database query builder.
 What changedAdded Action Center communication service and controller with SMS/Email support.
@@ -1352,7 +1352,7 @@ if (accountId && !isCrossAccount) {
 conditions.push(`account_id = ${paramIdx++}`);
 [Procucev2022](https://github.com/Procucev2022)[17 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438917231)
 Owner
-🔴 CRITICAL · bug — Invalid SQL parameter placeholder syntax in query filter
+ð´ CRITICAL Â· bug â Invalid SQL parameter placeholder syntax in query filter
 In queryCommunications, SQL placeholders are concatenated directly as account_id = ${paramIdx++} without the standard $ symbol prefix (e.g., $1). This causes syntax errors in database queries and opens the code up to potential SQL injection vectors if input sanitation fails.
 Suggested change
 conditions.push(`account_id = ${paramIdx++}`);
@@ -1361,13 +1361,13 @@ Reply...
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [11 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732123307)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🟡 Changes recommended
+ð¡ Changes recommended
 Critical email and SMS dispatches can be cancelled after the response or fail silently while communications remain recorded as Delivered.
-5 open issues [Webhook lookup ignores gateway message IDs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603) · New
-[Generated SQL placeholders are missing parameter markers](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628) · New
-[SMS dispatch metadata is dropped from the audit record](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644) · New
-[Unselected compose action links communication to the first task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661) · New
-[Task email recipient uses the sender’s address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682) · New
+5 open issues [Webhook lookup ignores gateway message IDs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603) Â· New
+[Generated SQL placeholders are missing parameter markers](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628) Â· New
+[SMS dispatch metadata is dropped from the audit record](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644) Â· New
+[Unselected compose action links communication to the first task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661) Â· New
+[Task email recipient uses the senderâs address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682) Â· New
 10 resolved since last review [Message truncation and character removal are not disclosed before sending](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090184)
 [History pagination omits records beyond the capped intermediate results](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090160)
 [Anonymous wildcard history requests expose communications across accounts](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4436090127)
@@ -1464,7 +1464,7 @@ Copilot [started reviewing](https://github.com/Procucev2022/Enterprise_qua_nextj
 [Procucev2022](https://github.com/Procucev2022) reviewed [9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732135172)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 3
 The PR introduces SMS and Email integration for the Action Center with DLT telecom support, compose modals, and audit trails. Most code is well-tested and robust, but there are a few SQL parameterization bugs in backend queries.
 What changedAdded actionCenterNotificationService and actionCenterCommController for handling multi-channel communications.
@@ -1476,7 +1476,7 @@ if (accountId && !isCrossAccount) {
 conditions.push(`account_id = ${paramIdx++}`);
 [Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949707)
 Owner
-🔴 CRITICAL · bug — Malformed SQL placeholders in queryCommunications
+ð´ CRITICAL Â· bug â Malformed SQL placeholders in queryCommunications
 When constructing the SQL query, string interpolation is used like account_id = ${paramIdx++} without the required $ prefix for parameterized queries (it produces account_id = 1 instead of account_id = $1). This will either cause a SQL syntax error or leave the query vulnerable to injection if unescaped values reach the database driver.
 Reply...
 [backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
@@ -1485,7 +1485,7 @@ if (entityType) {
 conditions.push(`(LOWER(account_type) = LOWER(${paramIdx}) OR LOWER(metadata->>'entityType') = LOWER(${paramIdx}))`);
 [Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949713)
 Owner
-🔴 CRITICAL · bug — Malformed SQL parameter placeholder index
+ð´ CRITICAL Â· bug â Malformed SQL parameter placeholder index
 In the entityType condition, ${paramIdx} is used without a $ sign (LOWER(account_type) = LOWER(${paramIdx})), resulting in invalid SQL syntax like LOWER(account_type) = LOWER(2) instead of LOWER(account_type) = LOWER($2).
 Reply...
 [backend/src/db/paymentDuesQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390/files/dc0c61ca69d0c26cd926f6a21e069b23aaf336dd#diff-5ae349b1833dd9283d6c2adcfe979aab866616e05d6a3f0eb2650064ae9c9807)
@@ -1494,19 +1494,19 @@ if (channel && channel !== 'ALL') {
 conditions.push(`UPPER(channel) = UPPER(${paramIdx++})`);
 [Procucev2022](https://github.com/Procucev2022)[9 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438949718)
 Owner
-🔴 CRITICAL · bug — Malformed SQL parameter placeholder index in channel condition
+ð´ CRITICAL Â· bug â Malformed SQL parameter placeholder index in channel condition
 Similar to previous conditions, UPPER(channel) = UPPER(${paramIdx++}) lacks the $ symbol, producing invalid SQL syntax (e.g., UPPER(channel) = UPPER(3) instead of UPPER(channel) = UPPER($3)).
 Reply...
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [3 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#pullrequestreview-5732168146)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AIleft a comment
 Contributor
-🔵 Needs a closer look
+ðµ Needs a closer look
 Critical SQL placeholder errors break persisted-history queries and silently trigger an in-memory fallback, causing saved history to disappear from results on fresh instances.
 4 open issues [Generated SQL placeholders are missing parameter markers](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939628)
 [Webhook lookup ignores gateway message IDs](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939603)
 [Unselected compose action links communication to the first task](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939661)
 [SMS dispatch metadata is dropped from the audit record](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939644)
-1 resolved since last review [Task email recipient uses the sender’s address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682)
+1 resolved since last review [Task email recipient uses the senderâs address](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/390#discussion_r4438939682)
 Review effort: Balanced
 This branch has not been deployed
 No deployments
@@ -1568,7 +1568,7 @@ Error: Process completed with exit code 1.
 0s
 0s
 Footer
-© 2026 GitHub, Inc.
+Â© 2026 GitHub, Inc.
 Footer navigation
 [Terms](https://docs.github.com/site-policy/github-terms/github-terms-of-service)
 [Privacy](https://docs.github.com/site-policy/privacy-policies/github-privacy-statement)
@@ -1619,7 +1619,7 @@ Error: The endpoint `approveCreditTask` and `rejectCreditTask` rely on `req.user
 Error: Blocked: 1 critical/high issue(s) found by AI review.
 Error: Process completed with exit code 1.
 
-[feat(action-center): internal task management system with multi-categ…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
+[feat(action-center): internal task management system with multi-categâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
 [3802dc9](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/commits/3802dc9a8309d057f43327f4b1a1a8b04cf94884)
 [Procucev2022](https://github.com/Procucev2022) requested a balanced review from [Copilot](https://github.com/apps/copilot-pull-request-reviewer) [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#event-34903560858)
 [Copilot](https://github.com/apps/copilot-pull-request-reviewer) AI reviewed [22 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735812960)
@@ -1629,7 +1629,7 @@ Copilot was unable to review this pull request because the user who requested th
 [Procucev2022](https://github.com/Procucev2022) reviewed [21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#pullrequestreview-5735820636)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 2
 The PR implements a comprehensive internal task management system with multi-category workflows, approvals, and reminders. While robustly tested, there is a missing authorization check on credit task approvals, a potential division-by-zero or NaN issue, and missing validation for specific task endpoints.
 What changedAdded internal task categories, dynamic types, and backend query support.
@@ -1643,7 +1643,7 @@ Added comprehensive unit and integration tests covering various success and fall
 async function approveCreditTask(req, res) {
 [Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793207)
 Owner
-🔴 CRITICAL · security — Missing Authorization Check for Credit Task Approvals
+ð´ CRITICAL Â· security â Missing Authorization Check for Credit Task Approvals
 The endpoint approveCreditTask and rejectCreditTask rely on req.user falling back to an admin role if undefined, but they never verify if the authenticated user actually possesses admin privileges or financial approver permissions. Any authenticated user could potentially approve or reject credit modifications.
 Reply...
 [backend/src/db/internalTaskQueries.js](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396/files/3802dc9a8309d057f43327f4b1a1a8b04cf94884#diff-d0202b121f9ba9ea3ecb37421c1412b12be624e9f5322db7340dbdd111239271)
@@ -1653,7 +1653,7 @@ if (vendor) {
 const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
 [Procucev2022](https://github.com/Procucev2022)[21 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/396#discussion_r4441793221)
 Owner
-🟡 MEDIUM · bug — Unsafe Balance Calculation with Fallback Fields
+ð¡ MEDIUM Â· bug â Unsafe Balance Calculation with Fallback Fields
 When calculating prevBal for vendors, the code evaluates vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits. If both are undefined or falsy (e.g., zero), it evaluates to 0, but if one field is missing while the other is present or NaN, it could lead to unexpected balance computations or NaNs during credit deductions.
 Suggested change
 const prevBal = Number(vendor.freeQuotationCredits || vendor.freeRfqDownloadCredits) || 0;
@@ -1852,7 +1852,7 @@ Error: Process completed with exit code 1.
 0s
 0s
 Footer
-© 2026 GitHub, Inc.
+Â© 2026 GitHub, Inc.
 Footer navigation
 [Terms](https://docs.github.com/site-policy/github-terms/github-terms-of-service)
 [Privacy](https://docs.github.com/site-policy/privacy-policies/github-privacy-statement)
@@ -1934,16 +1934,16 @@ Failing after 8s
 **Timestamp**: 2026-11-03T07:15:00Z
 
 ```text
-# Buyer & Seller Directory – Documents Section Implementation
+# Buyer & Seller Directory â Documents Section Implementation
 
-Implement a new Documents section in both Buyer 360° Dossier and Seller 360° Dossier. The Documents tab must display all documents associated with the respective buyer or seller account.
+Implement a new Documents section in both Buyer 360Â° Dossier and Seller 360Â° Dossier. The Documents tab must display all documents associated with the respective buyer or seller account.
 
 ## 1. Documents Tab Placement
 Add the Documents tab immediately after the Payments tab in both profiles.
 
 Required tab order:
 
-Buyer 360° Dossier:
+Buyer 360Â° Dossier:
 1. Profile
 2. RFQs
 3. Credit
@@ -1951,7 +1951,7 @@ Buyer 360° Dossier:
 5. Payments
 6. Documents
 
-Seller 360° Dossier:
+Seller 360Â° Dossier:
 1. Profile
 2. Quotes
 3. Credit
@@ -1987,16 +1987,16 @@ Display the following fields for each document:
 - Upload: Allow authorized users to upload additional documents.
 - Delete: Allow authorized users to delete documents after confirmation.
 
-## Additional Requirements – Buyer Credit Approval & Seller Quote Credits
-1. Buyer Profile – Add Credit with Approval Workflow
-- In the Buyer 360° Dossier, display an + Add Credit button next to the buyer's profile information.
+## Additional Requirements â Buyer Credit Approval & Seller Quote Credits
+1. Buyer Profile â Add Credit with Approval Workflow
+- In the Buyer 360Â° Dossier, display an + Add Credit button next to the buyer's profile information.
 - Open a popup showing Buyer Name, Available Credits, Requested Credits, and Reason.
 - Initiated By options: Govardhan, Krishna, Chandhan.
 - Approver options: Srinu Sir, Sudheer Sir.
-- Submit request as Pending Approval, tracked in Action Center → Internal Tasks.
+- Submit request as Pending Approval, tracked in Action Center â Internal Tasks.
 
-2. Seller Profile – Add Quote Credits
-- In the Seller 360° Dossier, provide a + Add Quote Credits button.
+2. Seller Profile â Add Quote Credits
+- In the Seller 360Â° Dossier, provide a + Add Quote Credits button.
 - Restrict to 1 to 5 credits per request.
 - Display seller's available quote credits before and after transaction.
 - Authorize and update balance immediately with full transaction history.
@@ -2195,7 +2195,7 @@ conditions.push(`(raw->>'buyerAccountId' = $${p} OR raw->'sharedBuyerAccountIds'
 d1Conditions.push(`(json_extract(raw, '$.buyerAccountId') = $${p} OR instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0)`);
 [Procucev2022](https://github.com/Procucev2022)[29 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#discussion_r4462956484)
 Owner
-🟠 HIGH · security — Potential SQL injection or incorrect parameter binding in SQLite/D1 shared buyer query
+ð  HIGH Â· security â Potential SQL injection or incorrect parameter binding in SQLite/D1 shared buyer query
 Using string interpolation (instr(json_extract(raw, '$.sharedBuyerAccountIds'), $${p}) > 0) on a JSON array stored as text can lead to false-positive partial string matches (e.g., searching for ID '1' matches ID '10') or injection risks if parameters are improperly handled. Use proper JSON array containment or exact matching instead of instr with unescaped substrings.
 Reply...
 [github-actions](https://github.com/apps/github-actions) Botcommented[25 minutes ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/405#issuecomment-6621137629)
@@ -2302,7 +2302,7 @@ gemini is fail check and pass that
 **Timestamp**: 2026-11-04T10:58:24+05:30
 
 ```text
-# Action Center – UI Size, Search Visibility & Clickable Summary Cards
+# Action Center â UI Size, Search Visibility & Clickable Summary Cards
 
 Please update the Action Center UI based on the attached screenshots. The main objective is to make all navigation tabs, summary cards, search fields, and filters compact, properly aligned, and fully functional.
 
@@ -2341,29 +2341,29 @@ When a user clicks a card:
 Examples:
 
 **Payment Dues:**
-- Low-Credit Accounts → Show all accounts with 2 or fewer credits.
-- Buyers → Show low-credit buyer accounts.
-- Sellers → Show low-credit seller accounts.
-- 0 Credits (Critical) → Show accounts with zero credits.
-- 1–2 Credits (Attention) → Show accounts with 1 or 2 credits.
-- Acknowledgement Pending → Show accounts awaiting acknowledgement.
+- Low-Credit Accounts â Show all accounts with 2 or fewer credits.
+- Buyers â Show low-credit buyer accounts.
+- Sellers â Show low-credit seller accounts.
+- 0 Credits (Critical) â Show accounts with zero credits.
+- 1â2 Credits (Attention) â Show accounts with 1 or 2 credits.
+- Acknowledgement Pending â Show accounts awaiting acknowledgement.
 
 **Buyer Directory:**
-- Total Buyers → Show all buyers.
-- Subscription Buyers → Show subscription buyers.
-- Total RFQs → Show relevant buyer RFQ records.
-- Free RFQs → Show free RFQ records.
-- Paid RFQs → Show paid RFQ records.
+- Total Buyers â Show all buyers.
+- Subscription Buyers â Show subscription buyers.
+- Total RFQs â Show relevant buyer RFQ records.
+- Free RFQs â Show free RFQ records.
+- Paid RFQs â Show paid RFQ records.
 
 **Seller Directory:**
 - Apply the same clickable-card behaviour to existing seller summary cards and their corresponding categories.
 
 **Registrations:**
-- Registered Clients → Show all registered clients.
+- Registered Clients â Show all registered clients.
 - If source-wise summary cards are available, clicking them should show Web App, WhatsApp, or Email registrations respectively.
 
 **Internal Tasks:**
-- Total Tasks, New Tasks, In Progress, Pending Approval, Completed, and Overdue → Show the respective task records.
+- Total Tasks, New Tasks, In Progress, Pending Approval, Completed, and Overdue â Show the respective task records.
 
 ### 3. Fix Search Visibility and Toolbar Layout
 
@@ -2390,7 +2390,7 @@ Reduce the overall UI dimensions in both Buyer and Seller Directories:
 
 Use the existing Action Center navigation buttons as the reference for the compact sizing and styling.
 
-### 5. Registrations – Source Type Filter
+### 5. Registrations â Source Type Filter
 
 Keep the Source Type dropdown with:
 - All
@@ -2492,7 +2492,7 @@ continue
 **Timestamp**: 2026-11-04T16:33:11+05:30
 
 ```text
-# Action Center – Complete Approval Module Implementation
+# Action Center â Complete Approval Module Implementation
 
 Redesign and implement the **Approvals module** under Action Center as a professional Procurement Approval Management Dashboard. The objective is to simplify the existing interface, centralize approval requests, and allow authorized approvers to review, approve, reject, and track requests efficiently.
 
@@ -2545,7 +2545,7 @@ When clicking a summary card:
 - Provide search, sorting, and pagination.
 - Close the popup without resetting the current page, filters, or scroll position.
 
-## 3. Approval Table – Essential Columns
+## 3. Approval Table â Essential Columns
 
 Keep the main approval table simple and relevant to procurement operations.
 
@@ -2600,7 +2600,7 @@ Requirements:
 
 All filters must work together correctly.
 
-## 5. Gear Icon – Table Column Settings
+## 5. Gear Icon â Table Column Settings
 
 Add a Gear icon at the right end of the filter toolbar.
 
@@ -2822,7 +2822,7 @@ Keep solving the architectural issues as well. Do a detailed analysis, do not st
 **Timestamp**: 2026-11-04T19:35:48+05:30
 
 ```text
-# Urgent: Action Center UI Fix – Previous Changes Not Applied
+# Urgent: Action Center UI Fix â Previous Changes Not Applied
 
 The previous UI changes have not resolved the issues. The attached screenshot shows the same problems again. Please inspect the actual frontend implementation and fix the root cause instead of applying another temporary CSS adjustment.
 
@@ -2831,7 +2831,7 @@ The previous UI changes have not resolved the issues. The attached screenshot sh
 - Do not leave unnecessary empty space where the heading was displayed.
 - Align the summary cards in the available header area.
 
-### 2. Fix Summary Cards – Compact Layout
+### 2. Fix Summary Cards â Compact Layout
 - Reduce the width, height, padding, font size, and gaps of all task summary cards.
 - Make all six cards fit in one horizontal row within the available content width.
 - Do not allow cards to extend beyond the right screen boundary.
@@ -2854,7 +2854,7 @@ The previous UI changes have not resolved the issues. The attached screenshot sh
 - Keep the main page scrollbar separate from the toolbar and summary-card layout.
 - At smaller screen widths, wrap cards or controls cleanly instead of clipping them.
 
-### 5. Technical Investigation – Mandatory
+### 5. Technical Investigation â Mandatory
 Before modifying the code:
 1. Identify the actual Action Center page and summary-card components.
 2. Inspect their parent containers, CSS/Tailwind classes, widths, min-width values, flex/grid settings, and overflow properties.
@@ -3059,7 +3059,7 @@ continue
 **Timestamp**: 2026-11-05T15:00:00+05:30
 
 ```text
-# Action Center – Complete UI Standardization, Table Customization & Database Integration
+# Action Center â Complete UI Standardization, Table Customization & Database Integration
 
 Please review and improve the entire **Action Center** across all modules. Apply the following requirements consistently to every section. Use the attached screenshots as references.
 
@@ -3091,7 +3091,7 @@ Apply the same design standards to every Action Center module:
 
 Remove unnecessary empty space on the left and right. Use the available screen width effectively.
 
-## 2. Gear Icon – Column Settings for Every Section
+## 2. Gear Icon â Column Settings for Every Section
 
 Add a Gear icon to the toolbar of every Action Center section.
 
@@ -3119,7 +3119,7 @@ The popup must contain:
 
 Apply this functionality independently to every Action Center module.
 
-## 3. Column Sorting – Ascending and Descending
+## 3. Column Sorting â Ascending and Descending
 
 Every applicable table column must support sorting.
 
@@ -3128,7 +3128,7 @@ Requirements:
 - Support ascending and descending sorting.
 - For date columns, provide Newest First and Oldest First sorting.
 - For numerical columns, support low-to-high and high-to-low.
-- For text columns, support A–Z and Z–A.
+- For text columns, support AâZ and ZâA.
 - Ensure sorting uses actual database values.
 - Maintain sorting when applying search and filters.
 - Support server-side sorting for large datasets where appropriate.
@@ -3151,7 +3151,7 @@ All toolbars must remain fixed in their intended layout and must not move horizo
 
 The toolbar should remain visually stable when scrolling through table records.
 
-## 5. Internal Tasks – Toolbar Alignment
+## 5. Internal Tasks â Toolbar Alignment
 
 Arrange Internal Tasks controls in this order:
 
@@ -3176,7 +3176,7 @@ Requirements:
 - Add Gear-based column settings and sorting.
 - Keep summary cards compact and consistent.
 
-## 6. Registrations – Toolbar and Filter Alignment
+## 6. Registrations â Toolbar and Filter Alignment
 
 Fix the Registrations toolbar.
 
@@ -3207,7 +3207,7 @@ Requirements:
 - Apply the selected filters to actual database records.
 - Ensure registration summary counts reflect the correct filtered records.
 
-## 7. Login Logs – Toolbar and Table
+## 7. Login Logs â Toolbar and Table
 
 Standardize the User Login & Session Logs interface.
 
@@ -3247,7 +3247,7 @@ Requirements:
 - Ensure live session information reflects actual session data.
 - Keep session inspection functionality working.
 
-## 8. Payment Dues – Column Settings and Toolbar
+## 8. Payment Dues â Column Settings and Toolbar
 
 Apply the common Action Center design.
 
@@ -3282,7 +3282,7 @@ Apply identical design standards to both directories.
 - Persist user-specific column preferences.
 - Ensure all records and profile information come from the database.
 
-Preserve all existing Buyer and Seller 360° Dossier features, including Credit, Communications, Payments, and Documents.
+Preserve all existing Buyer and Seller 360Â° Dossier features, including Credit, Communications, Payments, and Documents.
 
 ## 10. Approvals, Tickets and Scorecard
 
@@ -3318,7 +3318,7 @@ Requirements:
 - Apply the same column customization functionality.
 - Maintain document access permissions.
 
-## 12. Remove All Mock and Test Data – Critical Requirement
+## 12. Remove All Mock and Test Data â Critical Requirement
 
 This is one of the most important requirements.
 
@@ -3416,7 +3416,7 @@ Lines        : 98.78% ( 17628/17844 )
 
 Summary of all failing tests
  FAIL  __tests__/app/vendor/vendor-profileCoverage.test.tsx (48.839 s)
-  ● VendorProfilePage extended coverage (mocked store) › loading the vendor profile › profile request sends the session token as a bearer credential
+  â VendorProfilePage extended coverage (mocked store) âº loading the vendor profile âº profile request sends the session token as a bearer credential
 
     expect(element).toBeEnabled()
 
@@ -3516,7 +3516,7 @@ Summary of all failing tests
             <p
               class="text-xs text-slate-500 dark:text-gray-400 -mt-2"
             >
-              Loading your supplier profile…
+              Loading your supplier profileâ¦
             </p>
             <form
               class="space-y-6"
@@ -3579,9 +3579,9 @@ Ran all test suites.
 Test results written to: coverage\test-results.json
 Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
 
-✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+â [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
 
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+â [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
 PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
@@ -3600,7 +3600,7 @@ Lines        : 98.78% ( 17628/17844 )
 
 Summary of all failing tests
  FAIL  __tests__/app/vendor/vendor-profileCoverage.test.tsx (48.839 s)
-  ● VendorProfilePage extended coverage (mocked store) › loading the vendor profile › profile request sends the session token as a bearer credential
+  â VendorProfilePage extended coverage (mocked store) âº loading the vendor profile âº profile request sends the session token as a bearer credential
 
     expect(element).toBeEnabled()
 
@@ -3700,7 +3700,7 @@ Summary of all failing tests
             <p
               class="text-xs text-slate-500 dark:text-gray-400 -mt-2"
             >
-              Loading your supplier profile…
+              Loading your supplier profileâ¦
             </p>
             <form
               class="space-y-6"
@@ -3763,9 +3763,9 @@ Ran all test suites.
 Test results written to: coverage\test-results.json
 Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
 
-✖ [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+â [FAILED] Step 2B: Frontend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
 
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+â [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
 PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 **Timestamp**: 2026-11-05T12:30:31+05:30
 
@@ -3790,7 +3790,7 @@ continue
 ````text
 ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
  FAIL  __tests__/internalTasks.test.js (181.518 s)
-  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
+  â Internal Tasks API & Controller âº handles 500 error catch branches gracefully
 
     thrown: "Exceeded timeout of 20000 ms for a test.
     Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
@@ -3820,7 +3820,7 @@ Raise the pr and check all the coverages can pass annd gemini pr check and AI re
 ```text
 ASS  __tests__/controllersCatchBranches.test.js (53.731 s)
  FAIL  __tests__/internalTasks.test.js (181.518 s)
-  ● Internal Tasks API & Controller › handles 500 error catch branches gracefully
+  â Internal Tasks API & Controller âº handles 500 error catch branches gracefully
 
     thrown: "Exceeded timeout of 20000 ms for a test.
     Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
@@ -3866,7 +3866,7 @@ raise the pr and pass all the coverages and AI review and Gemini pr check and me
 **Timestamp**: 2026-11-05T18:00:00+05:30
 
 ```text
-# CRITICAL: Action Center UI Root-Cause Fix – Internal Tasks Toolbar & Layout
+# CRITICAL: Action Center UI Root-Cause Fix â Internal Tasks Toolbar & Layout
 ```
 
 ---
@@ -3896,7 +3896,7 @@ not solve the issue
 **Timestamp**: 2026-11-06T06:30:28+05:30
 
 ```text
-Please finalize & push all the existing changes & resolve the File conflict in [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416 ](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)
+Please finalize & push all the existing changes & resolve the File conflict in [https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416Â ](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/416)
 
 Puase for sometime, then I  would ask to resume in sometime&#x20;
 ```
@@ -4093,7 +4093,7 @@ Still too high D1 usage at certain places, can you please check once again
 ```text
 Summary of all failing tests
  FAIL  __tests__/app/category-manager/PaymentDuesDashboard.test.tsx (61.227 s)
-  ● PaymentDuesDashboard › handles API submission errors in communication modals
+  â PaymentDuesDashboard âº handles API submission errors in communication modals
 
     Unable to find an element with the text: DB Error. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
 
@@ -4111,15 +4111,15 @@ Time:        421.652 s
 
 ```text
 [navinprocucev-09](https://github.com/navinprocucev-09) and others added 5 commits [5 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430#commits-pushed-f65a902)
-[fix(ui): dynamically resolve vendor minor category from matching RFQ …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
+[fix(ui): dynamically resolve vendor minor category from matching RFQ â¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
 [f65a902](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/f65a9025ed73108e67b428f19e606737d98270a9)
 [D1 Overloading fix (](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)[#425](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/425)[)](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
 [dbb0c59](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/dbb0c59ee99e90a4b4848e35e2caba40292a5a8c)
-[fix(store): persist batch outreach channel delivery and vendor status…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
+[fix(store): persist batch outreach channel delivery and vendor statusâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
 [969f217](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/969f21786cb229cf7da4c880583cbb6516dd8782)
-[feat: fix Action Center toolbars, live login logs, and buyer/seller r…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
+[feat: fix Action Center toolbars, live login logs, and buyer/seller râ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
 [33c57bd](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/33c57bd36db0a471ad9403a44906264c8bb2bdbc)
-[fix(buyer): display multi-channel delivery counts and follow-up metri…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
+[fix(buyer): display multi-channel delivery counts and follow-up metriâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
 [84bbfc5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/430/commits/84bbfc59208735c88fde2e60a63c8ae7344ea05f)
 This branch was successfully deployed
 1 active deployment
@@ -4374,7 +4374,7 @@ resume, resolve file conflict issues & PR checks, [https://github.com/Procucev20
 
 ` ext
 
-### Action Center – Internal Tasks Module Implementation
+### Action Center â Internal Tasks Module Implementation
 
 Implement a complete **Internal Task Management System** under Action Center. All the activities listed below are internal tasks created by employees or admins to track work, assign responsibilities, monitor progress, and complete tasks.
 
@@ -4580,9 +4580,9 @@ Ran all test suites.
 Test results written to: coverage\test-results.json
 Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
 
-✖ [FAILED] Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
+â [FAILED] Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement encountered an error.
 
-❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
+â [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing.
 PS S:\procucev\Precucev-github\Enterprise_qua_nextjs>
 ```
 
@@ -4730,7 +4730,7 @@ Sourcing Mode & Turnaround Calculation:
 In \ rontend/app/category-manager/spend-dashboard.tsx, addedormalizeModeToken()\ to properly match alphanumeric tokens (\MODE_1, \mode_1, \mode_2, \mode_3, \mode_0).
 Added \calculateTurnaround()\ to derive true SLA durations from \quotes.submittedAt - createdAt.
 Category Naming Normalization:
-In \ rontend/app/category-manager/category-summary-dashboard.tsx, implemented \doesCategoryMatch()\ to normalize en-dashes (\–), em-dashes (\—), hyphens, casing, and whitespace.
+In \ rontend/app/category-manager/category-summary-dashboard.tsx, implemented \doesCategoryMatch()\ to normalize en-dashes (\â), em-dashes (\â), hyphens, casing, and whitespace.
 Buyer Console Aggregation:
 In \ rontend/app/category-manager/buyer-console.tsx, expanded buyer matching acrossaisedByEmail, \uyerEmail, \uyerAccountId, and \uyerAccountName, and supported quote pricing spend calculation.
 Testing & Coverage Compliance:
@@ -4738,7 +4738,7 @@ All modified files exceed 90% per-file unit test coverage across Statements, Bra
 TypeScript static typecheck (\ sc --noEmit) and ESLint verified with 0 errors.
 Production build verified with 100% static prerender across all 52 routes.
 [veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#commits-pushed-c497fb5)
-[fix(cm-analytics): restore real production data via D1 fallback hydra…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/c497fb504938482f369059a40c25c5278e1509ac)
+[fix(cm-analytics): restore real production data via D1 fallback hydraâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/c497fb504938482f369059a40c25c5278e1509ac)
 [c497fb5](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/c497fb504938482f369059a40c25c5278e1509ac)
 [test(cm-analytics): boost buyerAccountController branch coverage to >91%](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/bc5966d499e7b7e8a3fb026bd0967489fec6496b)
 [bc5966d](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438/commits/bc5966d499e7b7e8a3fb026bd0967489fec6496b)
@@ -4750,7 +4750,7 @@ Copilot was unable to review this pull request because the user who requested th
 [Procucev2022](https://github.com/Procucev2022) reviewed [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#pullrequestreview-5838405299)
 [Procucev2022](https://github.com/Procucev2022)left a comment
 Owner
-🤖 AI Code Review
+ð¤ AI Code Review
 Risk level: medium | Findings: 1
 The PR restores production analytics data via D1 fallback hydration, expands RFQ fetching for Category Managers, and improves matching/normalization routines. One high-severity issue was found regarding removed cache guards which could lead to redundant API requests.
 What changed
@@ -4765,7 +4765,7 @@ Removed cache-checking guards from ensureVendors and ensureVendorEvaluations in 
 const ensureVendors = async (force = false) => {
 [Procucev2022](https://github.com/Procucev2022)[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#discussion_r4522353919)
 Owner
-🟡 MEDIUM · performance — Removed cache check forces unnecessary bootstrap reloads
+ð¡ MEDIUM Â· performance â Removed cache check forces unnecessary bootstrap reloads
 Removing loadedEntitiesRef.current.vendors and evaluations checks means ensureVendors and ensureVendorEvaluations will now unconditionally trigger full bootstrap data reloads on every invocation, bypassing the intended caching mechanism and causing excessive network calls.
 Reply...
 [github-actions](https://github.com/apps/github-actions) Botcommented[1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/438#issuecomment-6762125422)
@@ -4851,18 +4851,18 @@ Some checks haven't completed yet
 in progress checks
 Loading
 [Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786768745/job/129729846139?pr=438)
-Started now — This check has started...
+Started now â This check has started...
 Loading
 [Request Copilot Review / request-copilot-review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769226/job/129729852182?pr=438)
-Started now — This check has started...
+Started now â This check has started...
 Required
 Loading
 [Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769002/job/129729850658?pr=438)
-Started now — This check has started...
+Started now â This check has started...
 Required
 Loading
 [Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/42786769002/job/129729850351?pr=438)
-Started now — This check has started...
+Started now â This check has started...
 Required
 Merging is blocked
 A conversation must be resolved before this pull request can be merged.
@@ -4954,9 +4954,9 @@ please fix this issue it running almost 5 hr please completed  very fast
 **Timestamp**: 2026-11-10T15:20:49+05:30
 
 ```text
-Supplier 360° Dossier – Required Updates
+Supplier 360Â° Dossier â Required Updates
 
-Add Active RFQs Section: Add a new Active RFQs tab immediately after Documents. Display only currently active RFQs matching the supplier’s registered categories. Exclude closed, expired, and cancelled RFQs. Show relevant RFQ details and allow users to open each RFQ.
+Add Active RFQs Section: Add a new Active RFQs tab immediately after Documents. Display only currently active RFQs matching the supplierâs registered categories. Exclude closed, expired, and cancelled RFQs. Show relevant RFQ details and allow users to open each RFQ.
 
 Fix Quote & Credit Utilization: The supplier currently shows 2 quotes but 5 credits. Verify the actual quote submissions, available credits, and credit transaction history from the database. Display accurate credit usage and utilization. Do not use hardcoded or dummy values.
 
@@ -5172,7 +5172,7 @@ Can you please check what is this issue.
 **Timestamp**: 2026-11-11T13:46:19+05:30
 
 ```text
-This is the Vendor Portal. From a vendor’s perspective, my submitted request has moved down the list, while other requests are appearing at the top. This could create confusion and make it difficult for vendors to track their own requests.
+This is the Vendor Portal. From a vendorâs perspective, my submitted request has moved down the list, while other requests are appearing at the top. This could create confusion and make it difficult for vendors to track their own requests.
 ```
 
 ---
@@ -5214,7 +5214,7 @@ This is not a vendor in our account, But the vendor is being displayed. Can you 
 **Timestamp**: 2026-11-11T18:37:11+05:30
 
 ```text
-This is our vendor’s profile. The vendor has not yet signed in to the portal, but multiple attachments have already been uploaded on his behalf.
+This is our vendorâs profile. The vendor has not yet signed in to the portal, but multiple attachments have already been uploaded on his behalf.
 
 Can you please check & fix this.
 ```
@@ -5374,7 +5374,7 @@ Filtration Issue, chosen category Civil works but showing results of Uncategoris
 ```text
 Please proceed with github commits optimizations suggested as well. i.e.,
 
-Update .git/hooks/pre-commit and scripts/setup-git-hooks.js to run npm run check:fast on commits (reducing commit time from 9.5 minutes to 2–5 seconds)?
+Update .git/hooks/pre-commit and scripts/setup-git-hooks.js to run npm run check:fast on commits (reducing commit time from 9.5 minutes to 2â5 seconds)?
 Also optimize backend test worker parallelism (e.g. --maxWorkers=50% instead of sequential --runInBand when full suites run)?
 
 
@@ -5389,7 +5389,7 @@ Why are we creating the vendor_search_fts? As a part of DB migration, it should 
 **Timestamp**: 2026-11-12T17:47:57+05:30
 
 ```text
-In the Buyer flow, Incorrect vendor assignment in V1 and V2 – Matching vendors are displayed, but invited and assigned vendor counts show 0. Expected Behaviour/Solution: All eligible matched vendors should be assigned to the RFQ, invitations should be dispatched successfully, and correct counts should be displayed in both Buyer and Category Manager modules. Please fix the issue
+In the Buyer flow, Incorrect vendor assignment in V1 and V2 â Matching vendors are displayed, but invited and assigned vendor counts show 0. Expected Behaviour/Solution: All eligible matched vendors should be assigned to the RFQ, invitations should be dispatched successfully, and correct counts should be displayed in both Buyer and Category Manager modules. Please fix the issue
 ```
 
 ---
@@ -5399,7 +5399,7 @@ In the Buyer flow, Incorrect vendor assignment in V1 and V2 – Matching vendors
 **Timestamp**: 2026-11-12T18:29:24+05:30
 
 ```text
-In the Buyer flow, Vendor contact details visibility – Vendor contact names and mobile numbers are visible in Buyer Follow-Up Details. Expected Behaviour/Solution: Display only the vendor company name. Hide personal contact names and mobile numbers. Please fix the issue
+In the Buyer flow, Vendor contact details visibility â Vendor contact names and mobile numbers are visible in Buyer Follow-Up Details. Expected Behaviour/Solution: Display only the vendor company name. Hide personal contact names and mobile numbers. Please fix the issue
 ```
 
 ---
@@ -5409,7 +5409,7 @@ In the Buyer flow, Vendor contact details visibility – Vendor contact names an
 **Timestamp**: 2026-11-12T17:52:00+05:30
 
 ```text
-In the Buyer flow, Buyer-uploaded vendor PO data – PO data is optional but currently treated as mandatory Expected Behaviour/Solution: Validate PO data as mandatory during vendor upload and prevent submission when required PO data is missing. Please fix the issue
+In the Buyer flow, Buyer-uploaded vendor PO data â PO data is optional but currently treated as mandatory Expected Behaviour/Solution: Validate PO data as mandatory during vendor upload and prevent submission when required PO data is missing. Please fix the issue
 ```
 
 ---
@@ -5419,7 +5419,7 @@ In the Buyer flow, Buyer-uploaded vendor PO data – PO data is optional but cur
 **Timestamp**: 2026-11-12T17:55:38+05:30
 
 ```text
-In the Buyer flow, RFQ dashboard filter – Selecting AI Extraction RFQ also displays Email RFQs. Expected Behaviour/Solution: When AI Extraction RFQ is selected, display only AI Extraction RFQs. Other RFQ sources should be excluded Please fix the issue
+In the Buyer flow, RFQ dashboard filter â Selecting AI Extraction RFQ also displays Email RFQs. Expected Behaviour/Solution: When AI Extraction RFQ is selected, display only AI Extraction RFQs. Other RFQ sources should be excluded Please fix the issue
 ```
 
 ---
@@ -5429,7 +5429,7 @@ In the Buyer flow, RFQ dashboard filter – Selecting AI Extraction RFQ also dis
 **Timestamp**: 2026-11-12T17:56:46+05:30
 
 ```text
-In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for upload, but only two vendors are successfully uploaded. The remaining two vendors are not uploaded despite having complete details. Expected Behaviour/Solution: All four selected vendors should be uploaded successfully. Display accurate upload counts and show clear error messages for any failed vendor records. Please fix the issue
+In the Buyer flow, Buyer-uploaded vendor â Four vendors are selected for upload, but only two vendors are successfully uploaded. The remaining two vendors are not uploaded despite having complete details. Expected Behaviour/Solution: All four selected vendors should be uploaded successfully. Display accurate upload counts and show clear error messages for any failed vendor records. Please fix the issue
 ```
 
 ---
@@ -5451,7 +5451,7 @@ In the Buyer flow, Buyer-uploaded vendor – Four vendors are selected for uploa
 **Timestamp**: 2026-11-12T18:37:31+05:30
 
 ```text
-In the Buyer flow, Buyer Registration Form – Field Label Cleanup: Remove unnecessary wording such as “Procurement Lead” and “Legal Name” from the registration form. Expected Behaviour/Solution: Use simple field labels such as Full Name, Company Name, GST Number, Pincode, City, State, Email ID, and Mobile Number. Please fix the issue
+In the Buyer flow, Buyer Registration Form â Field Label Cleanup: Remove unnecessary wording such as âProcurement Leadâ and âLegal Nameâ from the registration form. Expected Behaviour/Solution: Use simple field labels such as Full Name, Company Name, GST Number, Pincode, City, State, Email ID, and Mobile Number. Please fix the issue
 ```
 
 ---
@@ -5481,7 +5481,7 @@ In the Buyer flow, GSTIN Validation: Implement proper GSTIN validation during bu
 **Timestamp**: 2026-11-12T18:55:32+05:30
 
 ```text
-In the Buyer flow, Login Page – Remove Unnecessary Text: Remove the sentence “Sign in with your Procucev account. Credentials are verified against the enterprise user directory” displayed below the “Welcome back” heading Expected Behaviour/Solution: Keep the login page clean and simple by displaying only the “Welcome back” heading without the additional description. Please fix the issue
+In the Buyer flow, Login Page â Remove Unnecessary Text: Remove the sentence âSign in with your Procucev account. Credentials are verified against the enterprise user directoryâ displayed below the âWelcome backâ heading Expected Behaviour/Solution: Keep the login page clean and simple by displaying only the âWelcome backâ heading without the additional description. Please fix the issue
 ```
 
 ---
@@ -5501,7 +5501,7 @@ In the Buyer flow, Mobile Number Validation: The Registered Mobile Number field 
 **Timestamp**: 2026-11-12T19:07:07+05:30
 
 ```text
-In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the “DUAL-FILE ERP SETUP” label displayed in the Buyer Initial Setup popup. Expected Behaviour/Solution: Remove the label and maintain a clean, professional header without affecting the existing setup functionality. Please fix the issue
+In the Buyer flow, Remove Dual-File ERP Setup Label: Remove the âDUAL-FILE ERP SETUPâ label displayed in the Buyer Initial Setup popup. Expected Behaviour/Solution: Remove the label and maintain a clean, professional header without affecting the existing setup functionality. Please fix the issue
 ```
 
 ---
@@ -5561,7 +5561,7 @@ In the Buyer flow, Replace Department with Minor Category: Replace the Departmen
 **Timestamp**: 2026-11-12T19:50:30+05:30
 
 ```text
-In the Buyer flow, PO Dump Preview – Category Mapping: Ensure all uploaded PO line items are mapped to the correct Minor Category. Expected Behaviour/Solution: Display the matched Minor Category for each line item. If no exact match is found, show an appropriate status instead of assigning an incorrect category. Please fix the issue
+In the Buyer flow, PO Dump Preview â Category Mapping: Ensure all uploaded PO line items are mapped to the correct Minor Category. Expected Behaviour/Solution: Display the matched Minor Category for each line item. If no exact match is found, show an appropriate status instead of assigning an incorrect category. Please fix the issue
 ```
 
 ---
@@ -5621,7 +5621,7 @@ In the Buyer flow, Popup for Long Data: When vendor details such as company name
 **Timestamp**: 2026-11-12T20:09:05+05:30
 
 ```text
-In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to the third section (Statutory & Commercial Identifiers) so users can update the details when required. Expected Behaviour/Solution: Allow users to edit and save the third-section details independently without affecting the other sections. Please fix the issue
+In the Buyer flow, Edit Vendor Profile â Third Section: Add the Edit option to the third section (Statutory & Commercial Identifiers) so users can update the details when required. Expected Behaviour/Solution: Allow users to edit and save the third-section details independently without affecting the other sections. Please fix the issue
 ```
 
 ---
@@ -5631,7 +5631,7 @@ In the Buyer flow, Edit Vendor Profile – Third Section: Add the Edit option to
 **Timestamp**: 2026-11-12T20:10:03+05:30
 
 ```text
-In the Buyer flow, PAN Number – No Dummy Data: Do not automatically generate or insert dummy PAN numbers when the PAN field is empty. Expected Behaviour/Solution: Keep the PAN field blank if the user has not provided a PAN number. Save only the actual PAN details entered by the user. Please fix the issue
+In the Buyer flow, PAN Number â No Dummy Data: Do not automatically generate or insert dummy PAN numbers when the PAN field is empty. Expected Behaviour/Solution: Keep the PAN field blank if the user has not provided a PAN number. Save only the actual PAN details entered by the user. Please fix the issue
 ```
 
 ---
@@ -5651,7 +5651,7 @@ In the Buyer flow, Remove the "Auto-Generate with AI" button and replace it with
 **Timestamp**: 2026-11-12T20:13:21+05:30
 
 ```text
-In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you deal with directly — added to your vendor directory only" to "Add a vendor you deal with directly to your vendor directory only." Expected Behaviour/Solution: Display the updated description below the Add Vendor heading. Please fix the issue
+In the Buyer flow, Add Vendor Description: Change the text "Add a vendor you deal with directly â added to your vendor directory only" to "Add a vendor you deal with directly to your vendor directory only." Expected Behaviour/Solution: Display the updated description below the Add Vendor heading. Please fix the issue
 ```
 
 ---
@@ -5701,7 +5701,7 @@ In the Buyer flow, Vendor Rating Update Issue: After the buyer submits a revised
 **Timestamp**: 2026-11-12T20:21:08+05:30
 
 ```text
-In the Buyer flow, Vendor Evaluation Summary – Table Layout: Convert the entire Vendor Evaluation Summary page from the current card-based layout into a compact table format with proper columns and rows. Expected Behaviour/Solution: Display vendor details, evaluation status, overall score, category scores, and review status in a clean, aligned table with reduced spacing. Please fix the issue
+In the Buyer flow, Vendor Evaluation Summary â Table Layout: Convert the entire Vendor Evaluation Summary page from the current card-based layout into a compact table format with proper columns and rows. Expected Behaviour/Solution: Display vendor details, evaluation status, overall score, category scores, and review status in a clean, aligned table with reduced spacing. Please fix the issue
 ```
 
 ---
@@ -5931,7 +5931,7 @@ Please reuse the existing Pincode API functionality from the Create RFQ page in 
 **Timestamp**: 2026-11-14T06:25:02+05:30 (approximate: logged when this request was picked up; the exact send time was not recorded. A screenshot of the Vendor Follow-Up Details modal was attached.)
 
 ```text
-Remove the *“Next Automated Follow-Up Wave: Not recorded”* section. Instead, display the next follow-up time separately for each channel, calculated from the RFQ creation timestamp:
+Remove the *âNext Automated Follow-Up Wave: Not recordedâ* section. Instead, display the next follow-up time separately for each channel, calculated from the RFQ creation timestamp:
 
 - *AI Voice Call:* RFQ creation time + 6 hours
 
@@ -6424,7 +6424,7 @@ After clicking the button, the popup should close automatically once the request
 **Timestamp**: 2026-11-16T15:13:09+05:30
 
 ```text
- there are 11 vendors available in my Vendor Directory, but none of them are appearing in the Create RFQ page under Mode 1 – Internal Vendors , V2 and V3 also
+ there are 11 vendors available in my Vendor Directory, but none of them are appearing in the Create RFQ page under Mode 1 â Internal Vendors , V2 and V3 also
 ```
 
 ---
@@ -6444,7 +6444,7 @@ I closed this RFQ, and the status is showing Closed inside the RFQ details page.
 **Timestamp**: 2026-11-16T15:14:36+05:30
 
 ```text
-please fix these two issues in the Vendor Directory – Add Single Vendor popup:
+please fix these two issues in the Vendor Directory â Add Single Vendor popup:
 
 Phone Number Validation: The Phone field is accepting alphabets and special characters. Allow only numeric digits and validate the required mobile number length.
 
@@ -6667,11 +6667,11 @@ Harmonized prompt history in \prompts.md\ preserving exact chronological prompt 
 Single-Row Horizontal Toolbars: Aligned all search fields, dropdown filters, action buttons, export CSV, and control actions in a single horizontal row within parent window bounds.
 Dropdown Visibility & Padding: Ensured dropdown labels (\All Categories, \All Users, \All Request Types, \All Statuses) have proper widths, centered text, and zero truncation/clipping.
 Scroll Isolation: Preserved fixed sticky toolbar positioning while isolating table horizontal scrolling to dedicated inner container (\overflow-x-auto scrollbar-thin).
-3. Buyer Profile & Seller 360° Dossier Enhancements
+3. Buyer Profile & Seller 360Â° Dossier Enhancements
 Buyer Uploaded Vendors Tab: Integrated tab displaying real database records of vendors associated with the selected buyer with company name, contacts, categories, location, status, and dates.
 Request Type & Approvals Workflow: Integrated + Request Type\ options (Buyer Credit Addition/Deletion, Discounts, Trial Periods, Offline Payments) with synchronization across Approvals and Internal Tasks.
 4. 90% Unit Test Code Coverage Benchmark (Strict Per-File Enforcement)
-Every modified file satisfies ≥90 coverage across all 4 parameters:
+Every modified file satisfies â¥90 coverage across all 4 parameters:
 File
 Statements
 Branches
@@ -6726,11 +6726,11 @@ ESLint Analysis:pm run lint --prefix frontend\ passed with 0 warnings and 0 erro
 Fast Quality Gate:ode scripts/fast-check.js\ passed all unit tests and lint gates.
 Pre-Commit Gate: Automated Git pre-commit hook verified and approved all checks.
 [veerababuprocucev](https://github.com/veerababuprocucev) added 3 commits [18 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465#commits-pushed-1a482d4)
-[feat: fixed toolbars in internal tasks & approvals, buyer dossier upl…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/1a482d4b05ba1c9627847deecfd3a4d372714d41)
+[feat: fixed toolbars in internal tasks & approvals, buyer dossier uplâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/1a482d4b05ba1c9627847deecfd3a4d372714d41)
 [1a482d4](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/1a482d4b05ba1c9627847deecfd3a4d372714d41)
 [Merge branch 'origin/test-v3' into registration-page](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/dd9e3adfa6175178583f1d7d99fba503db55ff07)
 [dd9e3ad](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/dd9e3adfa6175178583f1d7d99fba503db55ff07)
-[test(buyerOnboarding): increase timeout for heavy async onboarding cr…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/43334fbf8fbb60e1280d2d7eb7fb3bc22809db73)
+[test(buyerOnboarding): increase timeout for heavy async onboarding crâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/43334fbf8fbb60e1280d2d7eb7fb3bc22809db73)
 [43334fb](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/43334fbf8fbb60e1280d2d7eb7fb3bc22809db73)
 [github-actions](https://github.com/apps/github-actions) Botcommented[16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465#issuecomment-6948658181)
 Procucev Enterprise CI Quality & Coverage Summary
@@ -6819,7 +6819,7 @@ frontend: app/category-manager/BuyerDetailsModal.tsx: functions 85.19% < 90%.
 frontend: app/category-manager/components/SupplierDossierDrawer.tsx: branches 83.33% < 90%.
 frontend: lib/store.tsx: branches 89.72% < 90%.
 frontend: lib/supplierProfileClient.ts: branches 83.33% < 90%.
-[feat: complete branch coverage for buyerAccountController, SupplierDo…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/52f25ebcc3249082ed8ad254417643059129734e)
+[feat: complete branch coverage for buyerAccountController, SupplierDoâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/52f25ebcc3249082ed8ad254417643059129734e)
 [52f25eb](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/52f25ebcc3249082ed8ad254417643059129734e)
 This branch has not been deployed
 No deployments
@@ -7479,8 +7479,8 @@ Refactor ONLY the UI layout and styling of the "All RFQs" section (`/category-ma
   - **Status dropdown** (`All Statuses` and existing status options).
   - **Right-aligned buttons on the same single line**:
     - Green `Export` / `Export CSV` button.
-    - Icon-only **Gear** button (`aria-label="Column Settings"`, `title="Column Settings"`) — **no visible text label**.
-    - Icon-only **Retry/Refresh** button (`aria-label="Retry"`, `title="Retry"`) — **no visible text label**.
+    - Icon-only **Gear** button (`aria-label="Column Settings"`, `title="Column Settings"`) â **no visible text label**.
+    - Icon-only **Retry/Refresh** button (`aria-label="Retry"`, `title="Retry"`) â **no visible text label**.
 
 ### 3. Strict 1-Line Excel-Style Table Rows & Horizontal Scroll
 - Wrap the table in a horizontal scroll container (`overflow-x-auto w-full`) with `min-w-max` so columns scroll horizontally instead of wrapping onto 2 or 3 vertical lines.
@@ -7692,14 +7692,14 @@ navinprocucev-09 commented 16 hours ago
 Collaborator
 No description provided.
 navinprocucev-09 added 3 commits 14 hours ago
-fix(vendor): resolve synthetic master vendor category update and prom…
+fix(vendor): resolve synthetic master vendor category update and promâ¦
 ecf0d8f
-fix(vendor-upload): discard unconfirmed vendor master data on setup m…
+fix(vendor-upload): discard unconfirmed vendor master data on setup mâ¦
 815ea77
-fix: resolve synthetic master category update, foreign record ownersh…
+fix: resolve synthetic master category update, foreign record ownershâ¦
 5fc96cc
 navinprocucev-09 force-pushed the fix-team-issues-v3 branch from 7f56e85 to 5fc96cc 14 hours ago
-github-actions Bot commented 14 hours ago•
+github-actions Bot commented 14 hours agoâ¢
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: FAILED
 348 / 349 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -7767,7 +7767,7 @@ Fix the following two issues on the "All RFQs" page (`/category-manager/all-rfqs
 
 ### 2. Fix Toolbar Widths, Icon Overlap & Control Order (Single Horizontal Row)
 Update the single-line top toolbar (`flex items-center gap-2 whitespace-nowrap`) so the widths and order are arranged cleanly from left to right:
-1. **Search bar (Wide — takes the remaining space):** Make the search input `flex-1 min-w-[240px]` so it is much wider than before. Fix the magnifying glass icon overlapping the placeholder text (`RFQ number, title, category...`) by adding proper left padding (`pl-9` or `pl-10`) on the input.
+1. **Search bar (Wide â takes the remaining space):** Make the search input `flex-1 min-w-[240px]` so it is much wider than before. Fix the magnifying glass icon overlapping the placeholder text (`RFQ number, title, category...`) by adding proper left padding (`pl-9` or `pl-10`) on the input.
 2. **All Statuses dropdown (Small/Compact):** Move `All Statuses` directly after the Search bar and shrink its width to a compact fixed/auto size (e.g., `w-36` or `w-40 shrink-0`) instead of stretching across the toolbar.
 3. **Start Date:** Compact date button/control (`w-36 shrink-0`) with `"Start Date"` inside and full-area click to open the calendar.
 4. **End Date:** Compact date button/control (`w-36 shrink-0`) with `"End Date"` inside and full-area click to open the calendar.
@@ -7775,7 +7775,7 @@ Update the single-line top toolbar (`flex items-center gap-2 whitespace-nowrap`)
 6. **Gear icon button:** Icon-only Column Settings button (`shrink-0`, no visible text).
 7. **Refresh/Retry icon button:** Icon-only Refresh button (`shrink-0`, no visible text).
 
-Do not change any existing colors, API calls, or filter/export/settings/refresh logic—only fix the Quote Matrix click/routing bug and the toolbar layout/order.
+Do not change any existing colors, API calls, or filter/export/settings/refresh logicâonly fix the Quote Matrix click/routing bug and the toolbar layout/order.
 
 Reuse all the existing code and don''t merge directly in the test-v3 raise the pr and pass all the coverages
 ```
@@ -7899,7 +7899,7 @@ contiinue
 ```text
 Fix the horizontal overflow/scrolling bug on the Registrations tab filter toolbar and add 100-per-page pagination to the All RFQs table.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Strictly reuse existing code**: Do NOT rewrite, duplicate, or replace existing state management, API calls, filter/search/sort methods, export utilities, or shared UI components. Hook into the exact existing handlers and utilities already in the codebase.
 - **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, KPI cards, table columns, row actions, modals, popups, sorting, filtering, and export behaviors 100% intact. Make minimal, surgical edits scoped strictly to the two items below.
 
@@ -7908,7 +7908,7 @@ In **Action Center > Registrations**, the toolbar is currently overflowing horiz
 
 - **Remove horizontal scrolling on the toolbar wrapper**: Remove `overflow-x-auto` / `overflow-x-scroll` from the toolbar container and use `flex items-center gap-2 w-full`.
 - **Apply explicit compact widths** (remove `w-full` or `flex-1` from the `<select>` elements), reusing all existing `value`, `onChange`, and `onClick` bindings without changing any logic:
-  1. **Search input**: `flex-1 min-w-[180px]` — fix the magnifying glass icon overlapping `Search...` by adding proper left padding (e.g., `pl-9`).
+  1. **Search input**: `flex-1 min-w-[180px]` â fix the magnifying glass icon overlapping `Search...` by adding proper left padding (e.g., `pl-9`).
   2. **All Users dropdown**: `w-[130px] shrink-0` (NOT `w-full`).
   3. **Source dropdown**: `w-[120px] shrink-0` (NOT `w-full`).
   4. **Start Date**: `w-[135px] shrink-0`.
@@ -7925,7 +7925,7 @@ Add a compact, single-row pagination bar directly below the **All RFQs** table c
 - **Page Size**: Display **100 RFQs per page** (`PAGE_SIZE = 100`).
   - If the existing API endpoint already supports `page` and `limit`, pass `limit=100` and `page` without breaking existing query params; otherwise, slice the existing filtered RFQ array client-side (`slice((page - 1) * 100, page * 100)`).
 - **Pagination Bar Layout** (single row inside the bottom of the white rounded table card, separated by a thin top border):
-  - **Left side**: Range text (e.g., `Showing 1–100 of 342 RFQs`).
+  - **Left side**: Range text (e.g., `Showing 1â100 of 342 RFQs`).
   - **Right side**: `< Previous` button, clickable page numbers (`1`, `2`, `3`, `4`, with the active page highlighted in the sidebar teal color), and `Next >` button.
 - **State & Safety Checks**:
   - Disable `Previous` on Page 1 and `Next` on the last page.
@@ -7986,18 +7986,18 @@ All done ?
 ```text
 Investigate the root causes and fix the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, and Request Approval flows).
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Find and fix the root cause first**: Do not apply surface-level UI patches that hide backend/data mismatches. Trace the exact API endpoints, DB queries, and ID fields so these issues cannot recur.
 - **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API clients, or modal components. Reuse existing approval, credit, and directory services/hooks.
 - **Do not break any existing UI or functionality**: Keep all unrelated tabs, columns, filters, and workflows intact, and add regression tests covering each fix.
 
 ---
 
-### 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
-- **Investigate ID/Lookup Mismatch**: In `BuyerDossierDrawer` (e.g., for `Veera solutions pvt ltd`), the **Payments** tab returns `Buyer account user-veerababuv2002-001 not found` and the **Request Buyer Credit Approval** modal shows `Available Credits: —` with the error `"The credit balance for ... is not on record, so the approver cannot see the balance this request is made against."` Meanwhile, the **Seller** credit approval modal correctly displays `Available Credits` (e.g., `99 Credits`).
+### 1. Root Cause Fix â Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+- **Investigate ID/Lookup Mismatch**: In `BuyerDossierDrawer` (e.g., for `Veera solutions pvt ltd`), the **Payments** tab returns `Buyer account user-veerababuv2002-001 not found` and the **Request Buyer Credit Approval** modal shows `Available Credits: â` with the error `"The credit balance for ... is not on record, so the approver cannot see the balance this request is made against."` Meanwhile, the **Seller** credit approval modal correctly displays `Available Credits` (e.g., `99 Credits`).
 - **Fix the lookup consistently across all Buyer Dossier tabs (Profile, Credit, Payments, and Credit Approval Modal)**:
   - Ensure the frontend passes the exact canonical buyer identifier expected by the backend (and/or the backend resolves by both `buyerId` and `userId` consistently) so `Credit`, `Payments`, and `Request Buyer Credit Approval` all read the live DB record without `not found` or `not on record` errors.
-  - Ensure `Available Credits` in the Buyer Credit Approval modal always displays the real numeric DB balance (including `0 Credits` when the balance is `0`, never `—` or a blocking error when the account exists in DB).
+  - Ensure `Available Credits` in the Buyer Credit Approval modal always displays the real numeric DB balance (including `0 Credits` when the balance is `0`, never `â` or a blocking error when the account exists in DB).
 - **Direct DB Sync After Approval**:
   - Verify the full end-to-end credit approval flow (for both Buyers and Sellers): when a request (e.g., `+5 Credits`) is approved, it must persist to the DB credit balance + credit history ledger and immediately reflect across the Dossier header/Profile `Available Quota`, the `Credit` tab cards/history, the directory table `Credits` column, and the approval modal without stale cache or manual workarounds.
 
@@ -8058,14 +8058,14 @@ continue
 ```text
 Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, Approvals, Credits, and Communications).
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Completely solve the root cause at the DB/service/API level**: Do NOT apply superficial UI patches or workarounds. Every balance, ledger row, and communication record must come from a single source of truth so these issues NEVER recur in the future.
 - **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API services, or UI components. Fix and unify the existing credit, approval, and communication services.
 - **Do not break any existing UI or functionality**: Keep all working tabs (e.g., Payments, Quotes, RFQs, Directory counts) and existing workflows 100% intact.
 
 ---
 
-### 1. Root Cause Fix — Approved Buyer Credits Not Persisting or Appearing in Buyer Dossier
+### 1. Root Cause Fix â Approved Buyer Credits Not Persisting or Appearing in Buyer Dossier
 - **Observed Bug**: Request `REQ-AAEEAABA2D35` (`Buyer Credit Addition: 5 RFQ Credits` for `Veera solutions pvt ltd`) is marked `Approved` in Approvals, yet `BuyerDossierDrawer` (`Credit` tab + `Request Buyer Credit Approval` modal) still displays `Total Credits Allocated: 0`, `Remaining Free Credits: 0`, `Available Credits: 0 Credits`, and `No credit transactions recorded`.
 - **Root Cause & Fix**:
   - Trace the full approval execution path when a **Buyer Credit Addition** (or Deletion) request is approved.
@@ -8077,7 +8077,7 @@ Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 iss
 
 ---
 
-### 2. Root Cause Fix — Seller Credit Split-Brain (`99` Subscription Credits vs `1` Ledger Credit) & Deduction Display Bug
+### 2. Root Cause Fix â Seller Credit Split-Brain (`99` Subscription Credits vs `1` Ledger Credit) & Deduction Display Bug
 - **Observed Bug**: For `Veera Solutions Pvt LTD` (on `Select` subscription tier with `100` allocated / `99` active quote balance):
   - The top KPI cards and `Request Seller Credit Deletion` modal show `99 Credits Available`.
   - Submitting a deduction of `10` credits fails with: `"Cannot delete 10 credits: Veera Solutions Pvt LTD only has 1 credits available."`
@@ -8087,12 +8087,12 @@ Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 iss
   - Unify the Seller credit balance into a **single source of truth** across subscription allocation, free credits, credit additions/deletions, deletion validation, and ledger running balance.
   - When a seller takes a subscription (e.g., `Select` = 100 credits), record the subscription credit allocation in the seller's credit transaction ledger (or initialize the baseline ledger with the subscription credit grant so the running balance starts from `100`).
   - Fix the deletion validation endpoint so it checks against the seller's actual, live total available credit balance (`99` credits, NOT just `freeQuotationCredits: 1`).
-  - In the Credit ledger table, fix the column mapping: `CREDIT_DEDUCTION` transactions MUST display in the **Consumed** column as a deduction (`-3` or `3` consumed) and display `—` in the **Added** column.
+  - In the Credit ledger table, fix the column mapping: `CREDIT_DEDUCTION` transactions MUST display in the **Consumed** column as a deduction (`-3` or `3` consumed) and display `â` in the **Added** column.
   - Update the ledger running balance calculation so additions add, deductions subtract, and the final balance matches the exact live active quote balance (`99 - 3 = 96` or current live balance).
 
 ---
 
-### 3. Root Cause Fix — Communications Not Appearing in Buyer Directory & Seller Directory
+### 3. Root Cause Fix â Communications Not Appearing in Buyer Directory & Seller Directory
 - **Observed Bug**: In both `BuyerDossierDrawer` and `SupplierDossierDrawer`, the **Communications** tab displays `Communications (0)` and `"No communication records found."` even when communications have been recorded or sent.
 - **Root Cause & Fix**:
   - Investigate the communications data model and API endpoints (`GET /api/buyer-accounts/:id/communications` and `GET /api/vendors/:id/communications` or equivalent).
@@ -8111,17 +8111,17 @@ Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 iss
 - Run fast verification (`npm run qc:fast` or `npm run check:fast`) and ensure 0 test failures.
 ```
 
-## Prompt 388 — 2026-11-22T13:26:12+05:30
+## Prompt 388 â 2026-11-22T13:26:12+05:30
 
 ```text
 Summary of Changes
-1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+1. Root Cause Fix â Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
 Robust Multi-Identifier Resolution: ImplementedesolveBuyerAccount\ in \ackend/src/controllers/buyerAccountController.js\ to resolve buyer accounts by \id, \userId, \uyerId, \organizationId, or \corporateEmail\ across memory, database, and buyer profile identity tables.
 Dossier Tabs Alignment: Replaced repetitive local ID lookups in \getCreditHistory, \getBuyerPaymentHistory, \getBuyerCommunications,ecordBuyerCommunication, \getBuyerUploadedVendors, andequestCreditApproval\ with canonicalesolveBuyerAccount. Fixes \Buyer account user-veerababuv2002-001 not found\ on Payments tab.
 Available Credits Display: In \BuyerDossierDrawer.tsx, Available Credits now displays numeric balances (including \
-[feat(category-manager): fix buyer dossier lookup sync, clean up initi…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[feat(category-manager): fix buyer dossier lookup sync, clean up initiâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
 [381b216](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
-[github-actions](https://github.com/apps/github-actions) Botcommented[8 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)•
+[github-actions](https://github.com/apps/github-actions) Botcommented[8 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)â¢
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: FAILED
 351 / 352 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -8199,7 +8199,7 @@ Coverage failures
 backend: src/db/paymentDuesQueries.js: statements 88.85% < 90%.
 backend: src/db/paymentDuesQueries.js: branches 83.01% < 90%.
 backend: src/db/paymentDuesQueries.js: functions 87.04% < 90%.
-[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[fix(category-manager): resolve buyer credit persistence, seller splitâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
 [6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
 This branch has not been deployed
 No deployments
@@ -8222,7 +8222,7 @@ Merging can be performed automatically.
 pass all the coverages
 ```
 
-## Prompt 389 — 2026-11-22T14:00:55+05:30
+## Prompt 389 â 2026-11-22T14:00:55+05:30
 
 ```text
 Quality checks
@@ -8249,9 +8249,9 @@ PASSED
 Schema parity checker tests
 PASSED
 [veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
-[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[fix(category-manager): resolve buyer credit persistence, seller splitâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
 [6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
-[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and câ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
 [4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
 This branch has not been deployed
 No deployments
@@ -8272,23 +8272,23 @@ Successful in 59s
 Pass all the coverages and ready to merge
 ```
 
-## Prompt 390 — 2026-11-22T14:45:00+05:30
+## Prompt 390 â 2026-11-22T14:45:00+05:30
 
 ```text
 continue
 ```
 
-## Prompt 391 — 2026-11-22T15:23:47+05:30
+## Prompt 391 â 2026-11-22T15:23:47+05:30
 
 ```text
 Summary of Changes
-1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+1. Root Cause Fix â Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
 Robust Multi-Identifier Resolution: ImplementedesolveBuyerAccount\ in \ackend/src/controllers/buyerAccountController.js\ to resolve buyer accounts by \id, \userId, \uyerId, \organizationId, or \corporateEmail\ across memory, database, and buyer profile identity tables.
 Dossier Tabs Alignment: Replaced repetitive local ID lookups in \getCreditHistory, \getBuyerPaymentHistory, \getBuyerCommunications,ecordBuyerCommunication, \getBuyerUploadedVendors, andequestCreditApproval\ with canonicalesolveBuyerAccount. Fixes \Buyer account user-veerababuv2002-001 not found\ on Payments tab.
 Available Credits Display: In \BuyerDossierDrawer.tsx, Available Credits now displays numeric balances (including \
-[feat(category-manager): fix buyer dossier lookup sync, clean up initi…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[feat(category-manager): fix buyer dossier lookup sync, clean up initiâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
 [381b216](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
-[github-actions](https://github.com/apps/github-actions) Botcommented[10 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)•
+[github-actions](https://github.com/apps/github-actions) Botcommented[10 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)â¢
 Procucev Enterprise CI Quality & Coverage Summary
 Strict 90% per-file coverage gate: PASSED
 352 / 352 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -8363,11 +8363,11 @@ PASSED
 Schema parity checker tests
 PASSED
 [veerababuprocucev](https://github.com/veerababuprocucev) added 3 commits [3 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
-[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[fix(category-manager): resolve buyer credit persistence, seller splitâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
 [6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
-[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and câ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
 [4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
-[fix(ci): restore canonical single-id queries and balance validations …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
+[fix(ci): restore canonical single-id queries and balance validations â¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
 [e6e467f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
 This branch has not been deployed
 No deployments
@@ -8416,9 +8416,9 @@ raise the pr for this only code of 6 files and pass all  the coverages and gemin
 **Timestamp**: 2026-11-23T04:42:37Z
 
 ```text
-Investigate the root cause and permanently fix the pagination bug on the Category Manager **All RFQs** page, where the footer is stuck at `Showing 1–100 of 100 RFQs` with only page `1` and `Next >` disabled.
+Investigate the root cause and permanently fix the pagination bug on the Category Manager **All RFQs** page, where the footer is stuck at `Showing 1â100 of 100 RFQs` with only page `1` and `Next >` disabled.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Identify and fix the root cause first**: Trace both the backend query/endpoint and frontend state to find why `total` is capped at `100` instead of reflecting the actual DB count. Do NOT apply workarounds like raising a hardcoded limit to 500 or 1000.
 - **Strictly reuse existing code, methods, and functionality**: Reuse the existing All RFQs API endpoint, filter/search/date query builders, fetch hooks, and shared pagination UI component. Do not rewrite or duplicate existing business logic.
 - **Ensure this issue never happens again in the future**: Enforce a strict contract where pagination always reads from an exact DB `COUNT(*)` (never `rows.length`), and add automated regression tests so this bug cannot be reintroduced.
@@ -8433,15 +8433,15 @@ Investigate the root cause and permanently fix the pagination bug on the Categor
 
 ### 2. Frontend Root Cause Fix (`All RFQs` Page)
 - Reuse the existing fetch handler and pass `page` and `limit: 100` whenever `page` or any filter changes.
-- Drive the existing pagination footer (`Showing X–Y of Z RFQs`, page numbers, and `Previous` / `Next` disabled states) strictly from the backend's `total` and `totalPages`—never from `rfqs.length`.
+- Drive the existing pagination footer (`Showing XâY of Z RFQs`, page numbers, and `Previous` / `Next` disabled states) strictly from the backend's `total` and `totalPages`ânever from `rfqs.length`.
 - Ensure clicking `Next >` or any page number fetches the next 100 RFQs from the server and smoothly scrolls the table back to the top.
 - Reset `page` to `1` whenever search, status, or date filters change.
 
 ### 3. Future-Proofing & Regression Tests
 - Add backend and frontend tests asserting that:
   1. When more than 100 RFQs exist in the DB (e.g., 250 RFQs), Page 1 returns 100 rows with `total: 250` and `totalPages: 3`.
-  2. The UI displays `Showing 1–100 of 250 RFQs` with `Next >` enabled.
-  3. Clicking `Next >` requests `page=2&limit=100` and renders RFQs `101–200`.
+  2. The UI displays `Showing 1â100 of 250 RFQs` with `Next >` enabled.
+  3. Clicking `Next >` requests `page=2&limit=100` and renders RFQs `101â200`.
   4. Changing any filter resets `page` to `1` and recalculates `total` accurately from the DB.
 ```
 
@@ -8474,7 +8474,7 @@ continue
 ```text
 Refactor the **Action Center > Internal tasks** tab to fix the clipped toolbar dropdowns, enforce a strict single-line spreadsheet row layout, and ensure a working Edit option for every internal task.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Strictly reuse existing code, methods, and functionality**: Reuse the existing Internal Tasks table, filter state, Create/Edit task modal, and update API endpoints. Do NOT duplicate components or rewrite working business logic.
 - **Do not break any existing UI or functionality**: Keep all KPI cards, Action Center tabs, checkboxes, sorting, filtering, `Send SMS / Email`, `Export CSV`, and delete actions 100% intact.
 
@@ -8488,10 +8488,10 @@ Refactor the **Action Center > Internal tasks** tab to fix the clipped toolbar d
 ---
 
 ### 2. Compact Every Internal Task Row to a Strict Single Line
-Update the **Internal tasks** table rows so every row is a compact, single-line Excel-style row (`whitespace-nowrap` with `truncate` where needed) — remove all stacked two-line sub-text:
-- **Task Subject & ID**: Remove the second line showing the task number/ID and sub-note (e.g., `TASK-2C79F40E72AD390B • Testing`). Display only the single-line task subject (with a hover tooltip showing the full subject, Task ID, and description).
+Update the **Internal tasks** table rows so every row is a compact, single-line Excel-style row (`whitespace-nowrap` with `truncate` where needed) â remove all stacked two-line sub-text:
+- **Task Subject & ID**: Remove the second line showing the task number/ID and sub-note (e.g., `TASK-2C79F40E72AD390B â¢ Testing`). Display only the single-line task subject (with a hover tooltip showing the full subject, Task ID, and description).
 - **Category & Type**: Remove the stacked second line (`Credit Management` / category manager sub-label). Display only one single-line value in the cell; on cursor hover, show the category details in a hover tooltip (and keep the user/assignee cleanly in `Assigned To`).
-- **Due Date & Time**: Remove the stacked `—` above `Closed` / `No Due Date`. Display only the single-line date/time, `Closed`, or `No Due Date` on one line.
+- **Due Date & Time**: Remove the stacked `â` above `Closed` / `No Due Date`. Display only the single-line date/time, `Closed`, or `No Due Date` on one line.
 - Keep `Done`, `Status`, `Related Entity`, `Priority`, `Assigned To`, and `Actions` vertically centered on that single line.
 
 ---
@@ -8521,9 +8521,9 @@ raise the pr and with this branch and don't merge directly pass all the covergae
 ```text
 Refactor the Buyer RFQ Console into a compact, single-line Excel-style table matching Vendor Performance and Action Center, with 100-buyers-per-page pagination, full ascending/descending sorting on every column (including date-wise), and drag-and-drop column reordering.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - Strictly reuse existing code, methods, and functionality: Reuse the existing Buyer Console data fetching, search/company/buyer filter state, KPI calculations, Review RFQ Details drill-down handler, and the Action Center shared table utilities (drag-to-rearrange columns, gear-icon column settings, sorting helpers, and pagination bar). Do NOT duplicate business logic or build parallel table/drag systems.
-- 100% Feature Parity — Every Existing Button & Data Point Must Stay Connected:
+- 100% Feature Parity â Every Existing Button & Data Point Must Stay Connected:
   - Do NOT drop or disconnect any button, click handler, filter, or data field from the previous Buyer RFQ Console UI.
   - Every existing element must be wired directly into the new layout:
     - Top 3 KPI cards (Total Active Spend Sourced, Total Sourcing Volume, Avg Quotes Per RFQ) -> connected to the exact existing live KPI calculations.
@@ -8552,7 +8552,7 @@ Refactor the Buyer RFQ Console into a compact, single-line Excel-style table mat
 ---
 
 ### 3. Strict Single-Line Excel-Style Table
-- Render every buyer on strictly one horizontal line (whitespace-nowrap, compact row height py-2, subtle row dividers) — zero stacked two-line cells. Use truncate with hover tooltips for long company names or emails.
+- Render every buyer on strictly one horizontal line (whitespace-nowrap, compact row height py-2, subtle row dividers) â zero stacked two-line cells. Use truncate with hover tooltips for long company names or emails.
 - Columns:
   1. Buyer Name (single line with small initial avatar)
   2. Company Name (single line, truncated with hover tooltip)
@@ -8570,7 +8570,7 @@ Refactor the Buyer RFQ Console into a compact, single-line Excel-style table mat
 
 ### 4. Full Column Sorting (Asc / Desc) & Drag-to-Rearrange Columns (Like Action Center)
 - Sort every column (Ascending & Descending):
-  - Make every data column header clickable with sort arrows (↑↓), supporting date-wise (Date), numeric (Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ), and alphabetical (Buyer Name, Company Name, Email, Phone, Sourcing Mode) ascending/descending sorting.
+  - Make every data column header clickable with sort arrows (ââ), supporting date-wise (Date), numeric (Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ), and alphabetical (Buyer Name, Company Name, Email, Phone, Sourcing Mode) ascending/descending sorting.
 - Drag-to-rearrange columns:
   - Reuse the exact drag-and-drop column reordering and persistence logic already used in the Action Center tables so users can drag headers to rearrange columns (and toggle/reset columns via the Gear icon).
 
@@ -8579,7 +8579,7 @@ Refactor the Buyer RFQ Console into a compact, single-line Excel-style table mat
 ### 5. Exact DB Count & 100-Buyers-Per-Page Pagination
 - Page Size: Display 100 buyers per page (PAGE_SIZE = 100).
 - Remove the 500 cap: Fetch and display the exact live DB count (COUNT(*)) rather than capping at 500 or deriving totals from rows.length.
-- Pagination Bar: Dock the existing compact single-row pagination bar at the bottom of the table card (Showing 1–100 of <exact total> Buyers on the left; < Previous, active teal page numbers, Next > on the right).
+- Pagination Bar: Dock the existing compact single-row pagination bar at the bottom of the table card (Showing 1â100 of <exact total> Buyers on the left; < Previous, active teal page numbers, Next > on the right).
 - Reset to Page 1 whenever search, company, buyer, or sort filters change, and smoothly scroll the table back to the top on page change.
 ```
 
@@ -8594,19 +8594,19 @@ Implement the following frontend-only UI changes in the **Buyer Login** portal.
 
 **Strict Constraint:** Do NOT delete, modify, or remove any backend code, API endpoints, database logic, or existing frontend handlers. Wrap hidden/disabled features in a simple boolean feature flag (e.g., `const ENABLE_MODE_3 = false;`, `const ENABLE_VENDOR_RATING = false;`) so they can be easily re-enabled later.
 
-### 1. AI RFQ Create — Disable Mode 3 Flow ("Coming Soon")
-- **Location:** Buyer Login → `AI RFQ Create` → `Select Sourcing Mode`
+### 1. AI RFQ Create â Disable Mode 3 Flow ("Coming Soon")
+- **Location:** Buyer Login â `AI RFQ Create` â `Select Sourcing Mode`
 - **Requirement:**
-  - Keep **Mode 3 – Autonomous AI + 360 Qualification** visible in the sourcing mode selector, but mark it as **Coming Soon** (e.g., add a "Coming Soon" badge or show a "Coming Soon" state/message when clicked).
+  - Keep **Mode 3 â Autonomous AI + 360 Qualification** visible in the sourcing mode selector, but mark it as **Coming Soon** (e.g., add a "Coming Soon" badge or show a "Coming Soon" state/message when clicked).
   - When a buyer selects Mode 3, do **not** render the active Mode 3 supplier roster/protocol flow, and disable the **Create & Dispatch RFQ** button (or prevent form submission) so Mode 3 RFQs cannot be dispatched.
   - Ensure Mode 0, Mode 1, and Mode 2 continue working normally without any regression.
 
-### 2. Vendor Directory — Hide Rating & Evaluation Actions
-- **Location:** Buyer Login → `Vendor Directory`
+### 2. Vendor Directory â Hide Rating & Evaluation Actions
+- **Location:** Buyer Login â `Vendor Directory`
 - **Requirement:**
   - Hide the **Revise Rating** button from the **Actions** column in the Vendor Directory table.
   - Inside the **Revise Supplier Performance Rating** modal, hide the **Request Vendor Evaluation** button (and keep the modal/rating code intact behind the feature flag).
-  - Do not remove any underlying API calls, state logic, or components—only conditionally hide them from the UI.
+  - Do not remove any underlying API calls, state logic, or componentsâonly conditionally hide them from the UI.
 ```
 
 ---
@@ -8636,16 +8636,16 @@ create the pr and pass all the covergaes don't merge in test-v3 pass all the gem
 **Timestamp**: 2026-11-23T19:32:49+05:30
 
 ```text
-Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** (`View Profile` modal).
+Implement a frontend-only UI change in the **Buyer Login â Vendor Directory** (`View Profile` modal).
 
 **Strict Constraint:** Do NOT delete or modify any backend code, API endpoints, database logic, or existing frontend handlers. Wrap the button in a boolean feature flag (e.g., `const ENABLE_VENDOR_EVALUATION = false;`) so it can be easily re-enabled later.
 
-### Vendor Directory — View Profile Modal
-- **Location:** Buyer Login → `Vendor Directory` → `View Profile` modal footer.
+### Vendor Directory â View Profile Modal
+- **Location:** Buyer Login â `Vendor Directory` â `View Profile` modal footer.
 - **Requirement:**
   - Hide the **Request Vendor Evaluation** button from the modal footer (next to `Edit Profile` and `Mark Inactive`).
   - Keep **Edit Profile**, **Mark Inactive**, and **Close** buttons visible and functioning normally.
-  - Do not remove any underlying API calls or handler functions—only conditionally hide the button from the frontend UI.
+  - Do not remove any underlying API calls or handler functionsâonly conditionally hide the button from the frontend UI.
 ```
 
 ---
@@ -8667,7 +8667,7 @@ create the pr using this branch and pass all the coverages and gemini pr and rea
 ```text
 Identify the root cause and fix the sync bug where linked tasks in **Action Center > Internal tasks** remain in `Open` state after their corresponding request in **Action Center > Approvals** is `Approved` or `Rejected`.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Find and fix the root cause first**: Trace the exact approval decision endpoint/service (`approve` / `reject`), the link between approval requests and internal tasks (`taskId` / `approvalRequestId`), and the status mapping in **Internal tasks**.
 - **Strictly reuse existing code, methods, and functionality**: Reuse the existing approval handlers, internal task update methods, and state refresh hooks. Do NOT duplicate business logic.
 - **Do NOT break any existing UI or functionality**: Keep all existing approval flows (Buyer/Seller Credits, Discounts, etc.), email notifications, and Internal Tasks filters/actions 100% intact.
@@ -8675,7 +8675,7 @@ Identify the root cause and fix the sync bug where linked tasks in **Action Cent
 ---
 
 ### 1. Auto-Close Linked Internal Task on Approve or Reject (Backend)
-- In the existing approval decision flow (covering **all** approval types — Buyer Credit Addition/Deletion, Seller Credit Addition/Deletion, Discounts, etc.):
+- In the existing approval decision flow (covering **all** approval types â Buyer Credit Addition/Deletion, Seller Credit Addition/Deletion, Discounts, etc.):
   - Whenever an approver clicks **Approve** OR **Reject**, automatically update the linked Internal Task in the database:
     - Transition its status from `Open` (or `Pending Approval`) to `Closed` (matching the exact canonical closed status used by Internal Tasks).
     - Mark the task as done (`Done` checkbox checked / `completedAt` set) so the Due Date column shows `Closed` just like manually completed tasks.
@@ -8714,7 +8714,7 @@ contineu finish that?
 ```text
 Replace ALL existing email/communication templates across **Internal Tasks** (`Action Center Communication` modal), **Buyer Directory** (`Record Communication & Activity` modal), and **Seller Directory** (`Record Communication` modal), wire up the standardized communication categories, task auto-completion rules, Add/Delete Credit routing, and Category Manager Analytics tracking.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Remove ALL current templates completely**: Delete every existing template/conversion scenario currently in the dropdowns (including `Post-Call Follow-up & Commercial Proposal`, `Platform Demo Invitation`, `Enterprise Sourcing Plan Overview`, all `Call Outcome: ...` entries, `Post-Call Follow-up & Paid Roster Invitation`, `Supplier Membership Plan Invitation`, `Featured Supplier Sponsorship`, `Custom Sales Pitch / Bespoke Proposal`, etc.).
 - **Single Shared Source of Truth**: Define the 8 new templates and categories in **one shared constant/config file** and import it into all 3 modals (Internal Tasks, Buyer Directory, Seller Directory) so they never drift out of sync.
 - **Strictly reuse existing code, methods, and functionality**: Reuse the existing modals, channel selectors (`Call`, `SMS`, `WhatsApp`, `Email`, `Both`), placeholder interpolation logic (using the codebase's existing token format), send/log API handlers, internal task update methods, approval handlers, and analytics queries.
@@ -8726,7 +8726,7 @@ Replace ALL existing email/communication templates across **Internal Tasks** (`A
 Update the template dropdown in **Internal Tasks**, **Buyer Directory**, and **Seller Directory** to show ONLY these 8 options. Selecting any option must auto-fill `Subject` and `Message` with live entity values while keeping both fields editable before sending:
 
 #### 1. `Credit / Quote (Buyer / Seller)`
-- **Subject:** `Update on Your {accountType} Credits / Quote Balance – {companyName}`
+- **Subject:** `Update on Your {accountType} Credits / Quote Balance â {companyName}`
 - **Body:**
 
 Hi {contactName},
@@ -8757,7 +8757,7 @@ Regards,
 
 
 #### 3. `Demo Schedule`
-- **Subject:** `Procucev QUA AI Platform Demo Scheduled – {companyName}`
+- **Subject:** `Procucev QUA AI Platform Demo Scheduled â {companyName}`
 - **Body:**
 Hi {contactName},
 
@@ -8774,7 +8774,7 @@ Regards,
 
 
 #### 4. `Send Proposal` *(Auto-completes Task)*
-- **Subject:** `Commercial Proposal for {companyName} – Procucev Enterprise`
+- **Subject:** `Commercial Proposal for {companyName} â Procucev Enterprise`
 - **Body:**
 Hi {contactName},
 
@@ -8787,7 +8787,7 @@ Regards,
 
 
 #### 5. `Send Corporate Email` *(Auto-completes Task)*
-- **Subject:** `Procucev Enterprise Partnership – {companyName}`
+- **Subject:** `Procucev Enterprise Partnership â {companyName}`
 - **Body:**
 Dear {contactName},
 
@@ -8800,7 +8800,7 @@ Warm regards,
 
 
 #### 6. `Onboarding Process`
-- **Subject:** `Welcome to Procucev – Complete Your Onboarding for {companyName}`
+- **Subject:** `Welcome to Procucev â Complete Your Onboarding for {companyName}`
 - **Body:**
 Hi {contactName},
 
@@ -8819,7 +8819,7 @@ Regards,
 
 
 #### 7. `Registration Task`
-- **Subject:** `Action Required: Verify & Activate Your Procucev Account – {companyName}`
+- **Subject:** `Action Required: Verify & Activate Your Procucev Account â {companyName}`
 - **Body:**
 Hi {contactName},
 
@@ -8832,7 +8832,7 @@ Regards,
 
 
 #### 8. `Internal Operations (Others)`
-- **Subject:** `[Internal Operations] Update Regarding {companyName} – {referenceId}`
+- **Subject:** `[Internal Operations] Update Regarding {companyName} â {referenceId}`
 - **Body:**
 Hi {contactName},
 
@@ -8942,7 +8942,7 @@ check why category manager internal task not working for site visiting?
 **Timestamp**: 2026-11-24T11:10:17+05:30
 
 ```text
-Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlers—only modify what is needed to resolve these bugs.
+Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlersâonly modify what is needed to resolve these bugs.
 
 1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
 - Root cause: The Filter Tasks drawer extends to the bottom-right corner behind/under the floating chat icon, so clicking "Apply Filters" triggers the chat widget.
@@ -8952,7 +8952,7 @@ Fix the following UI and functional issues in the Action Center and Category Man
 
 2. Open Date Picker on Clicking Anywhere in Date Input Boxes (Action Center & Category Manager)
 - For all date filter inputs (Action Center "Due From" / "Due To" and Category Manager date filters), attach an `onClick` handler that triggers `e.currentTarget.showPicker?.()` inside a `try/catch` block (with `.focus()` fallback) and add `cursor-pointer`.
-- Clicking anywhere inside the date input box—not just the small calendar icon—must open the native date calendar.
+- Clicking anywhere inside the date input boxânot just the small calendar iconâmust open the native date calendar.
 
 3. Full Audit & Root-Cause Fix for Action Center
 - Inspect the Action Center component end-to-end and fix any broken functionality, console errors, or edge cases, specifically verifying:
@@ -9001,14 +9001,14 @@ run locally that admin portal
 ````text
 Identify the root cause and permanently fix the **Trial Period** logic so that granting a trial period (e.g., 7 days) provides **time-based unlimited RFQs across any version/mode** with a live **day-by-day countdown**, instead of adding numeric credits and deducting 1 credit per RFQ.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 - **Find and fix the root cause first**: Trace the Trial Period request/approval flow, buyer entitlement/credit schema, and RFQ creation credit-deduction middleware BEFORE editing.
-- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)—keep Trial Period and Credit Addition cleanly separated.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)âkeep Trial Period and Credit Addition cleanly separated.
 - **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, plans, and workflows 100% intact.
 
 ---
 
-### 1. Root Cause Fix — Separate Trial Period (Time-Based) from Numeric Credits (Backend)
+### 1. Root Cause Fix â Separate Trial Period (Time-Based) from Numeric Credits (Backend)
 - **Observed Bug**: Granting a 7-day trial period currently executes `Admin Credit Addition (+7)` and logs `RFQ_CREATE (-1)` per RFQ (`FREE_TRIAL`), burning through the 7 "credits" in a single day.
 - **Required Fix**:
   - When a **Trial Period** request (e.g., `7 days`) is approved, do **NOT** add `7` to `remainingFreeCredits` and do **NOT** create an `Admin Credit Addition (+7)` transaction.
@@ -9033,11 +9033,11 @@ Identify the root cause and permanently fix the **Trial Period** logic so that g
 ---
 
 ### 3. Live Day-by-Day Trial Countdown in Buyer Account & Category Manager Dossier (Frontend)
-Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` → next day `6 Days Trial Period` → ... → `1 Day Left` → expired):
+Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` â next day `6 Days Trial Period` â ... â `1 Day Left` â expired):
 - **Buyer Account (`/buyer/dashboard` header & credit/plan display)**:
   - Where the buyer's credits / active plan are shown, clearly display the live trial badge (e.g., `7 Days Trial Period (Unlimited RFQs)`), updating automatically to `6 Days Trial Period` the next day, `5 Days`, etc.
 - **Category Manager > Buyer Dossier (`Profile` & `Credit` tabs)**:
-  - Display the active trial countdown (`7 Days Trial Period — Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
+  - Display the active trial countdown (`7 Days Trial Period â Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
 
 ---
 
@@ -9084,7 +9084,7 @@ check why category manager internal task not working for site visiting?
 **Timestamp**: 2026-11-24T14:25:00+05:30
 
 ```text
-Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlers—only modify what is needed to resolve these bugs.
+Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlersâonly modify what is needed to resolve these bugs.
 
 1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
 - Root cause: The Filter Tasks drawer extends to the bottom-right corner behind/under the floating chat icon, so clicking "Apply Filters" triggers the chat widget.
@@ -9094,7 +9094,7 @@ Fix the following UI and functional issues in the Action Center and Category Man
 
 2. Open Date Picker on Clicking Anywhere in Date Input Boxes (Action Center & Category Manager)
 - For all date filter inputs (Action Center "Due From" / "Due To" and Category Manager date filters), attach an onClick handler that triggers e.currentTarget.showPicker?.() inside a try/catch block (with .focus() fallback) and add cursor-pointer.
-- Clicking anywhere inside the date input box—not just the small calendar icon—must open the native date calendar.
+- Clicking anywhere inside the date input boxânot just the small calendar iconâmust open the native date calendar.
 
 3. Full Audit & Root-Cause Fix for Action Center
 - Inspect the Action Center component end-to-end and fix any broken functionality, console errors, or edge cases, specifically verifying:
@@ -9135,8 +9135,8 @@ Update the left sidebar navigation order under **OPERATIONAL DESK** as follows (
 1. **Dashboard** (rename existing `Operational Kanban` tab to `Dashboard` and route it to `/category-manager/dashboard`).
 2. **WhatsApp Analytics** (new 2nd tab):
    - Clicking **WhatsApp Analytics** must load and display `https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard` directly inside the main content area (full-width, full-height embedded view/iframe with a loading state and an optional "Open in new tab" fallback icon in case of frame restrictions).
-3. **Action Center** (3rd tab — preserve existing component and handlers).
-4. **Spend Analytics** (4th tab — preserve existing component and handlers).
+3. **Action Center** (3rd tab â preserve existing component and handlers).
+4. **Spend Analytics** (4th tab â preserve existing component and handlers).
 
 ---
 
@@ -9152,7 +9152,7 @@ Update the left sidebar navigation order under **OPERATIONAL DESK** as follows (
 
 ---
 
-### 4. KPI Cards (2 Rows × 5 Cards) & Click-to-Popup Behavior
+### 4. KPI Cards (2 Rows Ã 5 Cards) & Click-to-Popup Behavior
 Style all 10 cards as clean, compact clickable rounded rectangles matching the mockup:
 - **Minimalist card content ONLY:** Show ONLY the uppercase colored label on top and the bold live DB count underneath. Do NOT include icons, subtitles (no "All records", "Active pipeline", etc.), or footer links.
 
@@ -9168,7 +9168,7 @@ Style all 10 cards as clean, compact clickable rounded rectangles matching the m
 2. **TOTAL VENDORS**
 3. **BUYER REGISTRATION** (new buyer registrations within selected date filter)
 4. **VENDOR REGISTRATION** (new vendor registrations within selected date filter)
-5. **TOTAL LOGINS** (dark indigo card style) — **CRITICAL:** Must query and count **ONLY Category Manager Portal logins** (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
+5. **TOTAL LOGINS** (dark indigo card style) â **CRITICAL:** Must query and count **ONLY Category Manager Portal logins** (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
 
 **Click Behavior (All Row 1 & Row 2 Cards):**
 - Clicking any card in Row 1 or Row 2 must fetch the exact matching filtered records from the database (respecting the active date filter) and open a **Popup Modal**.
@@ -9183,11 +9183,11 @@ Below the KPI cards, render **3 separate white rounded chart cards** side-by-sid
 - **Y-axis:** Exact numeric counts from the DB.
 - **Legend style:** Use **circular colored dots** (not rectangle boxes) for all series indicators.
 
-1. **Card 1 — Total RFQs & Subscriptions (Monthly)**
+1. **Card 1 â Total RFQs & Subscriptions (Monthly)**
    - 3 lines: `RFQs`, `Buyer Subs`, `Vendor Subs`
-2. **Card 2 — New Registrations (Monthly)**
+2. **Card 2 â New Registrations (Monthly)**
    - 2 lines: `New Buyers`, `New Vendors`
-3. **Card 3 — Activity: RFQs Raised vs. Quotes (Monthly)**
+3. **Card 3 â Activity: RFQs Raised vs. Quotes (Monthly)**
    - 2 lines: `RFQs Raised by Clients`, `No. of Vendor Quotes` (tracking client-raised RFQs against total vendor quotes received per month)
 ```
 
@@ -9197,15 +9197,15 @@ Below the KPI cards, render **3 separate white rounded chart cards** side-by-sid
 
 Identify the root cause and permanently fix the **Trial Period** logic so that granting a trial period (e.g., 7 days) provides **time-based unlimited RFQs across any version/mode** with a live **day-by-day countdown**, instead of adding numeric credits and deducting 1 credit per RFQ.
 
-### STRICT CONSTRAINTS — READ FIRST
+### STRICT CONSTRAINTS â READ FIRST
 
 - **Find and fix the root cause first**: Trace the Trial Period request/approval flow, buyer entitlement/credit schema, and RFQ creation credit-deduction middleware BEFORE editing.
-- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)—keep Trial Period and Credit Addition cleanly separated.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)âkeep Trial Period and Credit Addition cleanly separated.
 - **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, plans, and workflows 100% intact.
 
 ---
 
-### 1. Root Cause Fix — Separate Trial Period (Time-Based) from Numeric Credits (Backend)
+### 1. Root Cause Fix â Separate Trial Period (Time-Based) from Numeric Credits (Backend)
 
 - **Observed Bug**: Granting a 7-day trial period currently executes `Admin Credit Addition (+7)` and logs `RFQ_CREATE (-1)` per RFQ (`FREE_TRIAL`), burning through the 7 "credits" in a single day.
 - **Required Fix**:
@@ -9233,12 +9233,12 @@ Identify the root cause and permanently fix the **Trial Period** logic so that g
 
 ### 3. Live Day-by-Day Trial Countdown in Buyer Account & Category Manager Dossier (Frontend)
 
-Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` → next day `6 Days Trial Period` → ... → `1 Day Left` → expired):
+Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` â next day `6 Days Trial Period` â ... â `1 Day Left` â expired):
 
 - **Buyer Account (`/buyer/dashboard` header & credit/plan display)**:
   - Where the buyer's credits / active plan are shown, clearly display the live trial badge (e.g., `7 Days Trial Period (Unlimited RFQs)`), updating automatically to `6 Days Trial Period` the next day, `5 Days`, etc.
 - **Category Manager > Buyer Dossier (`Profile` & `Credit` tabs)**:
-  - Display the active trial countdown (`7 Days Trial Period — Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
+  - Display the active trial countdown (`7 Days Trial Period â Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
 
 ---
 
@@ -9287,9 +9287,9 @@ Summary of Changes
    Frontend: 22 test suites, 764 tests passing, 0 failures.
    Per-File Coverage: >= 90% statements, branches, functions, and lines across all modified files.
    Production Build: Verified (next build compiled 52/52 static pages without errors).
-   [fix(action-center): resolve filter overlap with chat widget, native d…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/5f59e6a599a703f67d3b156ca9f3c49485691eda)
+   [fix(action-center): resolve filter overlap with chat widget, native dâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/5f59e6a599a703f67d3b156ca9f3c49485691eda)
    [5f59e6a](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/5f59e6a599a703f67d3b156ca9f3c49485691eda)
-   [github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510#issuecomment-7125022076)•
+   [github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510#issuecomment-7125022076)â¢
    Procucev Enterprise CI Quality & Coverage Summary
    Strict 90% per-file coverage gate: FAILED
    338 / 353 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
@@ -9409,9 +9409,9 @@ Summary of Changes
    frontend: OVERALL TOTAL: functions 80.34% < 90%.
    frontend: OVERALL TOTAL: lines 82.75% < 90%.
    [veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510#commits-pushed-660d618)
-   [fix(quality): resolve vendor-summary, buyer-profile, vendor-profile c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/660d6186d41ed9f340ef1f029936707837a38ebd)
+   [fix(quality): resolve vendor-summary, buyer-profile, vendor-profile câ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/660d6186d41ed9f340ef1f029936707837a38ebd)
    [660d618](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/660d6186d41ed9f340ef1f029936707837a38ebd)
-   [Merge branch 'test-v3' into fix/action-center-filter-overlap-and-date…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/f4e3a9202a1f087f9167b2d658ee6463241ea456)
+   [Merge branch 'test-v3' into fix/action-center-filter-overlap-and-dateâ¦](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/f4e3a9202a1f087f9167b2d658ee6463241ea456)
    [f4e3a92](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/f4e3a9202a1f087f9167b2d658ee6463241ea456)
    This branch has not been deployed
    No deployments
@@ -9468,8 +9468,8 @@ Update the left sidebar navigation order under OPERATIONAL DESK as follows (keep
 1. Dashboard (rename existing Operational Kanban tab to Dashboard and route it to /category-manager/dashboard).
 2. WhatsApp Analytics (new 2nd tab):
    - Clicking WhatsApp Analytics must load and display https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard directly inside the main content area (full-width, full-height embedded view/iframe with a loading state and an optional "Open in new tab" fallback icon in case of frame restrictions).
-3. Action Center (3rd tab — preserve existing component and handlers).
-4. Spend Analytics (4th tab — preserve existing component and handlers).
+3. Action Center (3rd tab â preserve existing component and handlers).
+4. Spend Analytics (4th tab â preserve existing component and handlers).
 
 3. Dashboard Header & Date Filter Bar
 - No page heading: Do NOT render a "Dashboard" title heading inside the main content area above the cards.
@@ -9481,7 +9481,7 @@ Update the left sidebar navigation order under OPERATIONAL DESK as follows (keep
   - End Date (individual clickable button with calendar icon)
 - Full-box calendar trigger: Clicking anywhere inside the Start Date or End Date button must immediately open the calendar picker (e.g., via inputRef.current?.showPicker() on click), not just on a tiny icon.
 
-4. KPI Cards (2 Rows × 5 Cards) & Click-to-Popup Behavior
+4. KPI Cards (2 Rows Ã 5 Cards) & Click-to-Popup Behavior
 Style all 10 cards as clean, compact clickable rounded rectangles matching the mockup:
 - Minimalist card content ONLY: Show ONLY the uppercase colored label on top and the bold live DB count underneath. Do NOT include icons, subtitles (no "All records", "Active pipeline", etc.), or footer links.
 
@@ -9497,7 +9497,7 @@ Row 2 (5 equal-width cards in one row):
 2. TOTAL VENDORS
 3. BUYER REGISTRATION (new buyer registrations within selected date filter)
 4. VENDOR REGISTRATION (new vendor registrations within selected date filter)
-5. TOTAL LOGINS (dark indigo card style) — CRITICAL: Must query and count ONLY Category Manager Portal logins (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
+5. TOTAL LOGINS (dark indigo card style) â CRITICAL: Must query and count ONLY Category Manager Portal logins (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
 
 Click Behavior (All Row 1 & Row 2 Cards):
 - Clicking any card in Row 1 or Row 2 must fetch the exact matching filtered records from the database (respecting the active date filter) and open a Popup Modal.
@@ -9510,11 +9510,11 @@ Below the KPI cards, render 3 separate white rounded chart cards side-by-side in
 - Y-axis: Exact numeric counts from the DB.
 - Legend style: Use circular colored dots (not rectangle boxes) for all series indicators.
 
-1. Card 1 — Total RFQs & Subscriptions (Monthly)
+1. Card 1 â Total RFQs & Subscriptions (Monthly)
    - 3 lines: RFQs, Buyer Subs, Vendor Subs
-2. Card 2 — New Registrations (Monthly)
+2. Card 2 â New Registrations (Monthly)
    - 2 lines: New Buyers, New Vendors
-3. Card 3 — Activity: RFQs Raised vs. Quotes (Monthly)
+3. Card 3 â Activity: RFQs Raised vs. Quotes (Monthly)
    - 2 lines: RFQs Raised by Clients, No. of Vendor Quotes (tracking client-raised RFQs against total vendor quotes received per month)
 ```
 
@@ -9635,7 +9635,7 @@ Root Cause & Permanent Solution Summary
    Category Manager > Buyer Dossier Drawer:
    In BuyerDossierDrawer.tsx:
    Profile Tab: Under "Available Quota", displays {trialDaysLeft} Days Trial Period / Unlimited RFQs (Expires {expiryDate}).
-   Credit Tab: Under "Remaining Free Credits", displays {trialDaysLeft} Days Trial Period — Unlimited RFQs / Expires: {expiryDate}.
+   Credit Tab: Under "Remaining Free Credits", displays {trialDaysLeft} Days Trial Period â Unlimited RFQs / Expires: {expiryDate}.
    Transaction history filters now include the TRIAL_GRANTED transaction type.
    Creation Modals:
    In ManualRFQModal.tsx, ingestion-wizard.tsx, and store.tsx, active trial users can select and submit RFQs across all modes without encountering "Quota Exhausted" locks.
@@ -9698,7 +9698,7 @@ Implement the following three updates across the Category Manager vendor invitat
 ---
 
 ### 2. Enable "+ Add New Vendor" Across All Sourcing Modes (Mode 0, 1, 2, 3)
-**Files:** `InviteVendorsModal.tsx` (lines ~897–919), backend `POST /api/vendors` route/middleware
+**Files:** `InviteVendorsModal.tsx` (lines ~897â919), backend `POST /api/vendors` route/middleware
 
 - Remove the `isV0OrV2` conditional restriction around the **"+ Add New Vendor"** button in `InviteVendorsModal.tsx` so Category Managers can add new vendors in **Mode 0 (V0), Mode 1 (V1), Mode 2 (V2), and Mode 3 (V3)**.
 - Verify there are no mode-based guards in the backend (`POST /api/vendors`) or parent pages (`all-rfqs.tsx`, `rfq-details.tsx`) that block adding new vendors in Mode 1 or Mode 3.
@@ -9802,13 +9802,13 @@ Currently, all 10 KPI cards show `0` and all 3 monthly charts are empty even tho
 - **Fix Date Filter & Chart Aggregation:**
   - Verify the date filter SQL comparison works properly with the actual timestamp format stored in the DB (e.g., ISO strings vs. timestamps, timezone handling).
   - Ensure **Total Buyers**, **Total Vendors**, **Total RFQs**, **Open RFQs**, **RFQs Without Quotes**, **Buyer Subscriptions**, and **Vendor Subscriptions** return accurate live counts from the DB.
-  - Ensure the 3 monthly trend charts always render the last 6 months on the X-axis (e.g., `Jun`–`Nov`) with actual aggregated monthly DB counts and visible plotted lines (do not leave the X-axis blank).
+  - Ensure the 3 monthly trend charts always render the last 6 months on the X-axis (e.g., `Jun`â`Nov`) with actual aggregated monthly DB counts and visible plotted lines (do not leave the X-axis blank).
 - **Preserve Existing Functionality:** Keep all existing backend routes, methods, and UI handlers across all other tabs completely intact.
 
 ### 2. Fix KPI Popup Modal (Click Outside to Close + Live Data)
 - **Close on Outside Click:** When any KPI card in Row 1 or Row 2 is clicked and the popup modal opens, clicking anywhere outside the modal box (on the dark/blurred backdrop overlay) must immediately close the popup.
   - Attach `onClick={onClose}` to the backdrop overlay container and `onClick={(e) => e.stopPropagation()}` to the inner modal card.
-  - Also support closing the popup with the `Escape` key in addition to the close (`×`) button.
+  - Also support closing the popup with the `Escape` key in addition to the close (`Ã`) button.
 - **Live Filtered Records:** Ensure clicking each of the 10 KPI cards fetches and displays the exact matching live DB records in the popup table (including **TOTAL LOGINS** scoped strictly to internal Category Manager Portal user logins).
 
 ### 3. Verification Before Finishing
@@ -9848,14 +9848,14 @@ Before editing any file, inspect and report the exact differences between `Dashb
 
 3. **Auth Middleware & Role String:**
    - Check the exact `authenticate` and `requireRole(...)` middleware used on the working `All RFQs` and `Action Center` routes.
-   - Use the EXACT same middleware and role list on the dashboard routes (e.g., check if the logged-in Category Manager role is `category_manager`, `cm`, `internal`, `admin`, etc. — do not guess).
+   - Use the EXACT same middleware and role list on the dashboard routes (e.g., check if the logged-in Category Manager role is `category_manager`, `cm`, `internal`, `admin`, etc. â do not guess).
 
 4. **Response JSON Shape Mismatch:**
    - Trace the exact JSON returned by `categoryManagerDashboardController.js` (e.g., `{ success: true, data: { ... } }` vs `{ metrics: { ... } }`) and verify `DashboardView.tsx` reads the exact same keys and nesting.
 
 5. **Date Filter & Empty-Result Trap:**
    - Verify that when `This Month` is selected by default, the date filter does NOT accidentally filter out cumulative totals like **TOTAL BUYERS**, **TOTAL VENDORS**, **TOTAL RFQS**, **OPEN RFQS**, **BUYER SUBSCRIPTIONS**, and **VENDOR SUBSCRIPTIONS** if they should show current/active totals, AND verify the DB timestamp format matches the date filter comparison.
-   - Reuse the EXACT working query/service functions already used by `All RFQs`, `Vendor Directory`, and `Login Logs` — do not invent new query paths.
+   - Reuse the EXACT working query/service functions already used by `All RFQs`, `Vendor Directory`, and `Login Logs` â do not invent new query paths.
 
 ---
 
@@ -9868,7 +9868,7 @@ Before editing any file, inspect and report the exact differences between `Dashb
 ### Step 3: Preserve Existing Code & Verify Real Execution
 - Keep all existing backend routes, services, and UI handlers across all other tabs completely intact.
 - Keep the popup modal click-outside + `Escape` close behavior working.
-- **Real verification required:** Start/hit the actual backend route (or run a real non-mocked integration check against the Express router + controller) to prove the endpoint returns HTTP 200 with real non-zero counts and populated 6-month chart arrays—not just mocked Jest tests.
+- **Real verification required:** Start/hit the actual backend route (or run a real non-mocked integration check against the Express router + controller) to prove the endpoint returns HTTP 200 with real non-zero counts and populated 6-month chart arraysânot just mocked Jest tests.
 - Run typecheck, lint, tests, and `next build`, then report the **exact root cause** you found before pushing.
 ```
 
@@ -9942,7 +9942,7 @@ Update the **Action Center** (`Vendors Directory` tab) to rename "Seller" termin
 
 ### 5. Verification
 - Verify in the live UI that **`Vendors Directory`** shows the exact live DB count on the **`SUBSCRIPTION VENDORS`** card and filters the table accurately when clicked.
-- Confirm no regressions in **Buyers Directory**, **Export Directory**, search, dropdown filters, column sorting, or `360° Dossier` actions.
+- Confirm no regressions in **Buyers Directory**, **Export Directory**, search, dropdown filters, column sorting, or `360Â° Dossier` actions.
 - Run typecheck (`tsc --noEmit`), lint, tests, and production build.
 ```
 
@@ -9964,7 +9964,7 @@ Compare `categoryManagerDashboardController.js` directly against the live workin
 
 2. **Remove ALL Row-Limit Truncations (`1000`, `200`, etc.):**
    - `TOTAL RFQS` is showing `200` instead of the real `240` shown in **All RFQs** and **Buyers Directory**. Reuse the exact same DB count/query used by **All RFQs** (no `limit: 200` cap).
-   - `TOTAL BUYERS` is showing `1,000` instead of the real `1,925` shown in **Buyers Directory** because `getBuyerAccountsFromDB(1000)` caps the result at 1,000. Use a real DB `COUNT(*)` / full-table aggregate query—the exact same source of truth as **Buyers Directory**.
+   - `TOTAL BUYERS` is showing `1,000` instead of the real `1,925` shown in **Buyers Directory** because `getBuyerAccountsFromDB(1000)` caps the result at 1,000. Use a real DB `COUNT(*)` / full-table aggregate queryâthe exact same source of truth as **Buyers Directory**.
    - `TOTAL VENDORS` must match **Vendors Directory** (`633,851`) using the exact same `total` query.
 
 3. **Fix `BUYER SUBSCRIPTIONS` & `VENDOR SUBSCRIPTIONS` Logic:**
@@ -9974,10 +9974,10 @@ Compare `categoryManagerDashboardController.js` directly against the live workin
 
 4. **Fix `BUYER REGISTRATION`, `VENDOR REGISTRATION`, and `TOTAL LOGINS` Showing `0`:**
    - With default **All Time** selected, these must return the real non-zero DB counts (not `0`), and dynamically filter when a date button is clicked.
-   - For `TOTAL LOGINS`, inspect the exact `userType` / `role` column values actually stored in the `Login Logs` table for Category Manager Portal users (check **Action Center → Login Logs** to see how it queries them) and count only internal Category Manager Portal logins.
+   - For `TOTAL LOGINS`, inspect the exact `userType` / `role` column values actually stored in the `Login Logs` table for Category Manager Portal users (check **Action Center â Login Logs** to see how it queries them) and count only internal Category Manager Portal logins.
 
 5. **Sync Popup Modal & Monthly Charts to the Same Source of Truth:**
-   - Every KPI card count, its click-to-open popup table, and the 3 bottom monthly line charts must query the exact same DB tables and predicates—zero hardcoded fallbacks, zero `limit: 1000` truncation on counts.
+   - Every KPI card count, its click-to-open popup table, and the 3 bottom monthly line charts must query the exact same DB tables and predicatesâzero hardcoded fallbacks, zero `limit: 1000` truncation on counts.
    - Preserve all existing backend routes, services, and UI handlers across all other tabs.
 
 ### Mandatory Verification Before Finishing
@@ -10165,21 +10165,21 @@ continue the vendo r is added by category manager why it is happening
    - Return `false` immediately if any recipient matches `invitations@procucev.com` (`VENDOR_EMAIL_GATEWAY_ADDRESS`) or `gmtrfq@procucev.com`.
    - Return `true` **only** if `rfq@procucev.com` is explicitly present in the recipients.
 
-2. **Hole 1 — `processMessage` vendor guard & RFQ reference preservation (`emailGatewayService.js`):**
+2. **Hole 1 â `processMessage` vendor guard & RFQ reference preservation (`emailGatewayService.js`):**
    - After `resolveVendorFromEmail`, add an explicit guard: if `vendorRecord && !isRegisteredBuyer` and `targetRfq` is `null`, **never** fall through to Buyer RFQ creation. Log and handle as a vendor email missing an RFQ reference (or resolve via active invite/thread headers).
    - In `extractRfqReferenceFromEmail`, fall back to scanning unstripped `rawBodyText` and `bodyHtml` (before `stripQuotedReplies`) when `subject` and stripped `bodyText` have no `RFQ...` match.
    - In `buildRfqInviteEmail` / `buildRawMimeMessage`, embed the `rfqNumber` inside the outbound `Message-ID` (e.g., `<rfq-${rfqNumber}-v${vendorId}-${timestamp}@procucev.com>`) so `In-Reply-To` and `References` always preserve the RFQ reference even when a vendor changes the subject to `Offer`.
 
-3. **Hole 2 — Gate Buyer RFQ creation & lock `resolveVendorConfig`:**
+3. **Hole 2 â Gate Buyer RFQ creation & lock `resolveVendorConfig`:**
    - In `resolveVendorConfig`, hardcode `autoRegisterUnregisteredBuyers: false` so buyer env vars cannot bleed into the vendor poller.
    - In `processMessage`, immediately before Buyer RFQ creation (line ~3070), enforce `if (!isStrictBuyerRfqMailbox(message, config)) return { status: 'skipped_non_buyer_mailbox' };`. This prevents `invitations@procucev.com`, `gmtrfq@procucev.com`, and forwarded mail from ever triggering `sendBuyerOnboardingWithRfqEmail`.
 
-4. **Hole 3 — `getOrCreateBuyerAccount` must check the `vendors` table:**
+4. **Hole 3 â `getOrCreateBuyerAccount` must check the `vendors` table:**
    - Before calling `identityQueries.insertBuyerAccount`, query `domainQueries.getVendorByEmailFromDB(normEmail)` (and `storeService.getVendorById(normEmail, 'all')`).
    - If the email exists in `vendors` (even if the `"user"` row is missing due to failed onboarding, bulk add, or GraphQL `createVendor`), block buyer creation immediately and return `{ blocked: true, reason: 'existing_vendor' }`.
    - Require `isStrictBuyerMailbox === true` inside `getOrCreateBuyerAccount` so no other code path can auto-create a buyer from a non-`rfq@` mailbox.
 
-5. **Hole 4 — Tighten `resolveMultiBuyerAttribution` (Scenario 4):**
+5. **Hole 4 â Tighten `resolveMultiBuyerAttribution` (Scenario 4):**
    - Only permit auto-registration when `isStrictBuyerRfqMailbox(message, config) === true`, `config.autoRegisterUnregisteredBuyers !== false`, and `!vendorRecord`.
 
 ---
@@ -10190,24 +10190,24 @@ continue the vendo r is added by category manager why it is happening
    - Whenever an RFQ invitation is sent to a vendor, persist/track the `rfqNumber`, `vendorId`/`vendorEmail`, `inviteMessageId`, and `invitedAt` (reusing existing invitation tracking tables/columns where available; add minimal migration only if columns like `invite_message_id`, `quotes_dispatch_due_at`, or `buyer_quotes_sent_at` are missing).
    - Set `quotes_dispatch_due_at = invited_at + 48 hours` on the RFQ when invites are sent.
 
-2. **Inbound Vendor Reply → Strict Bid Creation for That RFQ's Buyer Only:**
+2. **Inbound Vendor Reply â Strict Bid Creation for That RFQ's Buyer Only:**
    - Resolve `rfqNumber` in priority order:
      1. `In-Reply-To` / `References` matching stored `invite_message_id` or `rfq-<RFQNUMBER>-` pattern.
      2. `extractRfqReferenceFromEmail` across subject, stripped body, and unstripped HTML/quoted replies.
-     3. Single active open invite fallback for that vendor within the last 48 hours (only if unambiguous — exactly 1 open invite).
+     3. Single active open invite fallback for that vendor within the last 48 hours (only if unambiguous â exactly 1 open invite).
    - Verify the vendor was invited to that `rfqNumber`.
    - Create/update the bid strictly bound to `rfq.rfqNumber` and `rfq.buyerId` (reusing existing bid creation/parsing logic). Never attach to another buyer and never create a new RFQ.
 
 3. **Dual-Trigger Buyer Quotation Dispatch (Reuse Existing Send-Bid-Details Code):**
    - Create a single idempotent function `checkAndDispatchBuyerQuotations(rfqNumber, { trigger })` that:
-     1. Checks if `buyer_quotes_sent_at` is already set — if so, exit immediately (no duplicate emails).
+     1. Checks if `buyer_quotes_sent_at` is already set â if so, exit immediately (no duplicate emails).
      2. Triggers if **either**:
         - **Trigger A (Immediate):** All invited vendors for `rfqNumber` have submitted bids (`receivedBids >= totalInvited && totalInvited > 0`).
         - **Trigger B (48-Hour Timeout):** `NOW() >= quotes_dispatch_due_at` and at least 1 bid exists.
      3. Atomically claims the dispatch in DB (`UPDATE rfqs SET buyer_quotes_sent_at = NOW() WHERE rfq_number = $1 AND buyer_quotes_sent_at IS NULL RETURNING *`) to prevent race conditions between concurrent replies and the scheduler.
      4. Fetches the buyer's email strictly from the `rfqNumber`'s buyer record.
      5. Calls the **existing send-bid-details email function** to send the compiled vendor quotations to that buyer.
-   - Call `checkAndDispatchBuyerQuotations` immediately after every vendor bid is saved, and wire a lightweight cron/scheduler job (every 5–15 minutes) to check open RFQs where `buyer_quotes_sent_at IS NULL AND quotes_dispatch_due_at <= NOW()`.
+   - Call `checkAndDispatchBuyerQuotations` immediately after every vendor bid is saved, and wire a lightweight cron/scheduler job (every 5â15 minutes) to check open RFQs where `buyer_quotes_sent_at IS NULL AND quotes_dispatch_due_at <= NOW()`.
 
 ---
 
@@ -10217,21 +10217,21 @@ Write and run automated **unit tests** and **end-to-end smoke tests** covering a
 
 ### Unit Tests
 1. **Strict Mailbox Gate:**
-   - Unregistered sender → `rfq@procucev.com` → allowed to create buyer account + RFQ.
-   - Unregistered sender → `invitations@procucev.com` → blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
-   - Unregistered or registered sender → `gmtrfq@procucev.com` → blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
-   - Forwarded/aliased mail where `Delivered-To` or `To` is `invitations@procucev.com` or `gmtrfq@procucev.com` on the buyer poller → blocked.
+   - Unregistered sender â `rfq@procucev.com` â allowed to create buyer account + RFQ.
+   - Unregistered sender â `invitations@procucev.com` â blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
+   - Unregistered or registered sender â `gmtrfq@procucev.com` â blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
+   - Forwarded/aliased mail where `Delivered-To` or `To` is `invitations@procucev.com` or `gmtrfq@procucev.com` on the buyer poller â blocked.
 2. **Vendor Protection (No `"user"` Row):**
-   - Vendor exists in `vendors` table (no `"user"` row) and emails `rfq@procucev.com` or `invitations@procucev.com` with subject `Offer` and `Quote 25/11/2026` → blocked from `getOrCreateBuyerAccount` and Buyer RFQ creation.
+   - Vendor exists in `vendors` table (no `"user"` row) and emails `rfq@procucev.com` or `invitations@procucev.com` with subject `Offer` and `Quote 25/11/2026` â blocked from `getOrCreateBuyerAccount` and Buyer RFQ creation.
 3. **RFQ Reference Extraction:**
    - Vendor reply with subject `Offer` (no RFQ # in subject or top body) resolves `rfqNumber` via `In-Reply-To` / `References` `Message-ID` OR unstripped quoted HTML.
 4. **Strict Bid Binding:**
    - Vendor reply creates a bid strictly under the matching `rfq.buyerId`, never another buyer.
 5. **Dual-Trigger Buyer Dispatch & Idempotency:**
-   - All invited vendors bid before 48h → existing send-bid-details email fires immediately to the exact buyer email for that `rfqNumber`; `buyer_quotes_sent_at` is set.
-   - Partial bids + 48h elapsed → scheduler fires existing send-bid-details email once to that buyer email.
-   - Concurrent replies or repeated cron runs → atomic DB lock prevents duplicate emails.
-   - Late vendor bid after 48h → bid is saved under `rfq.buyerId` without duplicating the initial buyer dispatch email.
+   - All invited vendors bid before 48h â existing send-bid-details email fires immediately to the exact buyer email for that `rfqNumber`; `buyer_quotes_sent_at` is set.
+   - Partial bids + 48h elapsed â scheduler fires existing send-bid-details email once to that buyer email.
+   - Concurrent replies or repeated cron runs â atomic DB lock prevents duplicate emails.
+   - Late vendor bid after 48h â bid is saved under `rfq.buyerId` without duplicating the initial buyer dispatch email.
 
 ### Smoke Tests
 - Simulate the exact production incident (`dhairya@dhairyaengineering.co.in` replying to `invitations@procucev.com` with subject `Offer` and HTML table `Quote 25/11/2026`) and verify:
@@ -10351,8 +10351,8 @@ continue
 
 ## 1. Environment Configuration (Dual Vendor Mailboxes)
 Replace the single vendor email address with two env-configured mailboxes:
-* **`VENDOR_INVITE_EMAIL_ADDRESS`** (e.g., `invitations@procucev.store`) — Network Invite Mailbox (portal-only quoting).
-* **`VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`** (e.g., `gmtrfq@procucev.com`) — Direct / GMT RFQ Mailbox (email reply-to-quote enabled).
+* **`VENDOR_INVITE_EMAIL_ADDRESS`** (e.g., `invitations@procucev.store`) â Network Invite Mailbox (portal-only quoting).
+* **`VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`** (e.g., `gmtrfq@procucev.com`) â Direct / GMT RFQ Mailbox (email reply-to-quote enabled).
 
 Update `backend/src/config/constants.js`, `.env.example`, and `vendorFromAddress()` / `resolveVendorConfig()` so outbound routing selects the sender address dynamically based on vendor source and assignment context.
 
@@ -10380,8 +10380,8 @@ Configure the Gmail API poller to handle both vendor mailboxes with distinct beh
 
 ### A. `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` (e.g., `gmtrfq@procucev.com`)
 * **Behavior:** Full existing email-to-quote ingestion pipeline.
-* When a vendor replies with RFQ details/pricing (including CM-assigned vendors on V0, buyer-uploaded vendors on V1–V3, and CM-invited/created vendors):
-  1. Run existing 3-tier RFQ matching (`In-Reply-To`/`References` → RFQ ID regex → 48h fallback).
+* When a vendor replies with RFQ details/pricing (including CM-assigned vendors on V0, buyer-uploaded vendors on V1âV3, and CM-invited/created vendors):
+  1. Run existing 3-tier RFQ matching (`In-Reply-To`/`References` â RFQ ID regex â 48h fallback).
   2. Validate vendor eligibility (ensure CM-assigned V0 vendors pass the V0 `isVendorInvitedToRfq` guard).
   3. Parse body/attachments (`quoteAttachmentService.js`), create the quotation/bid in DB, and send **Email 11 (Quote Submitted ACK)** from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`.
 
@@ -10395,7 +10395,7 @@ Configure the Gmail API poller to handle both vendor mailboxes with distinct beh
 
 ---
 
-## 4. Category Manager New Vendor Creation — Immediate Credentials
+## 4. Category Manager New Vendor Creation â Immediate Credentials
 
 Update the Category Manager vendor creation/ingestion flow (`vendorIngestionService.js` and any single-add CM vendor controller):
 * **Trigger:** When a Category Manager adds a **new vendor for the first time** (vendor account does not already exist in the system).
@@ -10411,11 +10411,11 @@ Update the Category Manager vendor creation/ingestion flow (`vendorIngestionServ
 ---
 
 ## 5. Files to Inspect & Update
-* `backend/src/config/constants.js` — Env var bindings for both vendor mailboxes.
-* `emailGatewayService.js` — Dual-mailbox polling (`resolveVendorConfig()`), portal-redirect auto-reply for `VENDOR_INVITE_EMAIL_ADDRESS`, and bid creation for `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` (including V0 CM-assigned vendors).
-* `transactionalEmailTemplates.js` — Dynamic `from` routing via `vendorFromAddress()`, new/updated portal-redirect auto-reply template, and CM new-vendor temp-password credential email template.
-* `vendorIngestionService.js` (and CM manual vendor add route) — Generate temp password and dispatch credentials from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` on first-time CM vendor creation.
-* `rfqChaserScheduler.js` — Ensure reminder emails (Emails 9, 13) use the same sender mailbox originally assigned to that vendor/RFQ invite.
+* `backend/src/config/constants.js` â Env var bindings for both vendor mailboxes.
+* `emailGatewayService.js` â Dual-mailbox polling (`resolveVendorConfig()`), portal-redirect auto-reply for `VENDOR_INVITE_EMAIL_ADDRESS`, and bid creation for `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` (including V0 CM-assigned vendors).
+* `transactionalEmailTemplates.js` â Dynamic `from` routing via `vendorFromAddress()`, new/updated portal-redirect auto-reply template, and CM new-vendor temp-password credential email template.
+* `vendorIngestionService.js` (and CM manual vendor add route) â Generate temp password and dispatch credentials from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` on first-time CM vendor creation.
+* `rfqChaserScheduler.js` â Ensure reminder emails (Emails 9, 13) use the same sender mailbox originally assigned to that vendor/RFQ invite.
 
 ---
 
@@ -10425,7 +10425,7 @@ Before finishing, verify:
 2. No email addresses are hardcoded anywhere in the diff.
 3. Auto-matched network vendor receives invite from `VENDOR_INVITE_EMAIL_ADDRESS`; replying does NOT create a quote and triggers the "download RFQ & submit quote in portal" auto-reply.
 4. Buyer-uploaded vendor (V1/V2/V3) receives invite from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`; replying creates a quote and sends Email 11.
-5. CM-assigned vendor on V0 (and V1–V3) receives invite from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`; replying creates a quote/bid.
+5. CM-assigned vendor on V0 (and V1âV3) receives invite from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`; replying creates a quote/bid.
 6. First-time CM-added vendor receives temp password credentials from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` and can log in and change their password.
 
 
@@ -10636,7 +10636,7 @@ Investigate and fix a bug in the Category Manager "Invite New Vendor" flow where
 Requirements:
 1. Trace the Category Manager invite-new-vendor backend flow (GraphQL resolver / service) and compare it with the existing working new-vendor creation / onboarding flow that sends login credentials.
 2. Identify why the credentials email is not triggered (e.g., missing call to the credentials/welcome email helper, vendor created before the `isNewVendor` check, missing temporary password generation, or a silently caught/unawaited error).
-3. Strictly reuse the existing vendor account creation, temporary password/token generation, and credentials email service/template—do NOT create new email templates, duplicate mailer logic, or new helper functions.
+3. Strictly reuse the existing vendor account creation, temporary password/token generation, and credentials email service/templateâdo NOT create new email templates, duplicate mailer logic, or new helper functions.
 4. Ensure that when a Category Manager invites a brand-new vendor, both the login credentials email and the RFQ details email are reliably sent (and do not resend credentials if the vendor already exists).
 5. Do not change any other functionality, database schema, or UI.
 ```
@@ -10675,13 +10675,23 @@ Continue
 
 ---
 ## 2026-11-28T09:35:53+05:30
-In the Vendor Directory page (/buyer/vendor-summary), there are currently two horizontal scrollbars on the vendor table�one at the top and one at the bottom.
+In the Vendor Directory page (/buyer/vendor-summary), there are currently two horizontal scrollbars on the vendor tableone at the top and one at the bottom.
 
 Task:
 1. Hide/remove ONLY the bottom horizontal scrollbar on the main table scroll container.
 2. Keep the upper horizontal scrollbar visible and fully synced with the table's horizontal scroll position.
 3. Keep the right-side vertical scrollbar visible and functional.
 4. Keep horizontal scrolling (via the upper scrollbar, trackpad, or Shift + wheel) working smoothly across browsers (Chrome, Edge, Safari, Firefox).
-5. Reuse the existing component structure, refs, and styling�do not refactor unrelated layout, queries, or UI components.
+5. Reuse the existing component structure, refs, and stylingdo not refactor unrelated layout, queries, or UI components.
 
 Create the pr and pass all the coverages and make to ready to merge in test-v3 i can merge
+
+---
+
+### Prompt 476
+
+**Timestamp**: 2026-11-28T09:49:45+05:30
+
+```text
+continue
+```

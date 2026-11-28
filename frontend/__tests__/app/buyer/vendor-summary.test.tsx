@@ -5836,6 +5836,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const tableContainer = screen.getByTestId('vendor-directory-table-container');
       expect(tableContainer).toBeInTheDocument();
       expect(tableContainer).toHaveClass('overflow-x-auto');
+      expect(tableContainer).toHaveClass('overflow-y-auto');
       expect(tableContainer).toHaveClass('vendor-directory-table-scroll');
       expect(tableContainer).toHaveClass('vendor-directory-main-scroll');
       expect(tableContainer).toHaveAttribute('role', 'region');
@@ -5846,6 +5847,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(topScroller).toBeInTheDocument();
       expect(topScroller).toHaveClass('overflow-x-auto');
       expect(topScroller).toHaveClass('vendor-directory-table-scroll');
+      expect(topScroller).not.toHaveClass('vendor-directory-main-scroll');
       expect(topScroller).toHaveAttribute('aria-hidden', 'true');
 
       const table = tableContainer.querySelector('table');
@@ -5856,6 +5858,185 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(thead).toBeInTheDocument();
       expect(thead?.className).toContain('sticky');
       expect(thead?.className).toContain('top-0');
+
+      // Bidirectional horizontal scroll synchronization & rAF lock guard.
+      const rafCallbacks: FrameRequestCallback[] = [];
+      const rafSpy = jest.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      });
+      try {
+        topScroller.scrollLeft = 240;
+        fireEvent.scroll(topScroller);
+        expect(tableContainer.scrollLeft).toBe(240);
+
+        // Locked while rAF hasn't flushed, so table scroll does not bounce back.
+        tableContainer.scrollLeft = 999;
+        fireEvent.scroll(tableContainer);
+        expect(topScroller.scrollLeft).toBe(240);
+
+        act(() => {
+          rafCallbacks.splice(0).forEach((cb) => cb(0));
+        });
+
+        tableContainer.scrollLeft = 410;
+        fireEvent.scroll(tableContainer);
+        expect(topScroller.scrollLeft).toBe(410);
+      } finally {
+        rafSpy.mockRestore();
+      }
+    });
+
+    it('syncs Firefox vertical scroller on vertical overflow and supports Shift+wheel horizontal scrolling', () => {
+      const vendorMock = {
+        id: 'v-scroll-v-test',
+        name: 'Vertical & Wheel Scroll Vendor',
+        vendorCode: 'VND-SCROLL-02',
+        majorCategory: 'IT',
+        minorCategories: ['Servers'],
+        source: 'buyer',
+        origin: 'Buyer Manual Empanelment',
+        contactPerson: 'Wheel Tester',
+        email: 'wheel@tester.test',
+        phone: '+91 9888888888',
+        location: 'Bengaluru, Karnataka',
+        score: 88,
+        rating: 4.5,
+        status: 'ACTIVE',
+        buyerId: 'buyer-current',
+        buyerEmail: 'current@corp.com',
+        active: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorMock],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: {
+          id: 'buyer-current',
+          corporateEmail: 'current@corp.com',
+          organizationName: 'Current Corp',
+        },
+      });
+
+      const originalResizeObserver = globalThis.ResizeObserver;
+      let resizeCallback: ResizeObserverCallback | null = null;
+      const observeMock = jest.fn();
+      const disconnectMock = jest.fn();
+      globalThis.ResizeObserver = jest.fn((cb: ResizeObserverCallback) => {
+        resizeCallback = cb;
+        return {
+          observe: observeMock,
+          unobserve: jest.fn(),
+          disconnect: disconnectMock,
+        };
+      }) as unknown as typeof ResizeObserver;
+
+      const rafCallbacks: FrameRequestCallback[] = [];
+      const rafSpy = jest.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      });
+
+      try {
+        const { unmount } = render(
+          <VendorSummary
+            onViewEvaluation={mockOnViewEvaluation}
+            onNavigateToWizard={mockOnNavigateToWizard}
+          />
+        );
+
+        const tableContainer = screen.getByTestId('vendor-directory-table-container');
+        expect(observeMock).toHaveBeenCalledWith(tableContainer);
+        expect(screen.queryByTestId('vendor-directory-vertical-scroller')).not.toBeInTheDocument();
+
+        // Simulate real viewport/table dimensions where both horizontal & vertical overflow exist.
+        Object.defineProperty(tableContainer, 'scrollWidth', { configurable: true, value: 2480 });
+        Object.defineProperty(tableContainer, 'clientWidth', { configurable: true, value: 1000 });
+        Object.defineProperty(tableContainer, 'scrollHeight', { configurable: true, value: 960 });
+        Object.defineProperty(tableContainer, 'clientHeight', { configurable: true, value: 400 });
+
+        act(() => {
+          resizeCallback?.([], {} as ResizeObserver);
+        });
+
+        const verticalScroller = screen.getByTestId('vendor-directory-vertical-scroller');
+        expect(verticalScroller).toHaveClass('vendor-directory-firefox-vscroll');
+        expect(verticalScroller).toHaveClass('vendor-directory-table-scroll');
+        expect(verticalScroller.firstElementChild).toHaveStyle({ height: '960px' });
+
+        // Bidirectional vertical sync between tableContainer and Firefox vertical scroller.
+        verticalScroller.scrollTop = 180;
+        fireEvent.scroll(verticalScroller);
+        expect(tableContainer.scrollTop).toBe(180);
+
+        act(() => {
+          rafCallbacks.splice(0).forEach((cb) => cb(0));
+        });
+
+        tableContainer.scrollTop = 320;
+        fireEvent.scroll(tableContainer);
+        expect(verticalScroller.scrollTop).toBe(320);
+
+        // Shift + wheel horizontal scrolling (pixel mode and Firefox line mode).
+        tableContainer.scrollLeft = 0;
+        const pixelWheel = new WheelEvent('wheel', {
+          shiftKey: true,
+          deltaY: 120,
+          deltaX: 0,
+          deltaMode: 0,
+          cancelable: true,
+        });
+        tableContainer.dispatchEvent(pixelWheel);
+        expect(pixelWheel.defaultPrevented).toBe(true);
+        expect(tableContainer.scrollLeft).toBe(120);
+
+        const lineWheel = new WheelEvent('wheel', {
+          shiftKey: true,
+          deltaY: 3,
+          deltaX: 0,
+          deltaMode: 1,
+          cancelable: true,
+        });
+        tableContainer.dispatchEvent(lineWheel);
+        expect(lineWheel.defaultPrevented).toBe(true);
+        expect(tableContainer.scrollLeft).toBe(168);
+
+        // Non-Shift vertical wheel and native deltaX wheel should not be intercepted.
+        const normalWheel = new WheelEvent('wheel', {
+          shiftKey: false,
+          deltaY: 50,
+          deltaX: 0,
+          cancelable: true,
+        });
+        tableContainer.dispatchEvent(normalWheel);
+        expect(normalWheel.defaultPrevented).toBe(false);
+
+        const nativeHorizontalWheel = new WheelEvent('wheel', {
+          shiftKey: true,
+          deltaY: 0,
+          deltaX: 40,
+          cancelable: true,
+        });
+        tableContainer.dispatchEvent(nativeHorizontalWheel);
+        expect(nativeHorizontalWheel.defaultPrevented).toBe(false);
+
+        unmount();
+        expect(disconnectMock).toHaveBeenCalled();
+      } finally {
+        rafSpy.mockRestore();
+        globalThis.ResizeObserver = originalResizeObserver;
+      }
     });
   });
 });

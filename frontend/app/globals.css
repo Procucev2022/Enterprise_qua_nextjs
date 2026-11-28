@@ -178,34 +178,65 @@ body {
 /*
  * Vendor Directory: main table container — hide ONLY the bottom horizontal
  * scrollbar while keeping the right-side vertical scrollbar and all scroll
- * behaviour (trackpad, Shift+wheel, programmatic scrollLeft) intact.
+ * behaviour (top scroller sync, trackpad, Shift+wheel) intact across
+ * Chrome, Edge, Safari, and Firefox.
  *
  * Strategy:
- *  - Webkit: target the horizontal scrollbar corner with height:0 so it
- *    takes no visible space without suppressing the vertical thumb.
- *  - Firefox (scrollbar-width):  "thin" on the base class already shows a
- *    slim vertical bar; we additionally zero out the inline scrollbar-color
- *    alpha for horizontal via a workaround — Firefox does not support
- *    per-axis suppression in CSS, so we hide the horizontal track/thumb by
- *    giving them transparent colours while the vertical side retains its
- *    colour via JS-synced top scroller. The functional scrollLeft still
- *    works because overflow-x remains "scroll" (not hidden).
+ *  - Chrome, Edge, Safari: reset scrollbar-width/color to auto so modern
+ *    Chromium (121+) and Safari (18.2+) do not ignore ::-webkit-scrollbar
+ *    rules inherited from .vendor-directory-table-scroll. Then collapse only
+ *    the horizontal scrollbar to 0px while keeping the 9px vertical bar.
+ *  - Firefox (@supports not selector(::-webkit-scrollbar)): Firefox cannot
+ *    suppress only one axis via CSS scrollbar-width, so hide both native
+ *    scrollbars on the main container and display the synced right-side
+ *    vertical scroller (.vendor-directory-firefox-vscroll) instead.
  */
+.vendor-directory-main-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  -ms-overflow-style: auto;
+}
+.dark .vendor-directory-main-scroll {
+  scrollbar-color: auto;
+}
+.vendor-directory-main-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 0;
+}
 .vendor-directory-main-scroll::-webkit-scrollbar:horizontal {
+  width: 0;
   height: 0;
   display: none;
 }
-/* Ensure the vertical scrollbar keeps its styled appearance */
 .vendor-directory-main-scroll::-webkit-scrollbar:vertical {
   width: 9px;
 }
-.vendor-directory-main-scroll {
-  /* Firefox: hide horizontal scrollbar by making it transparent;
-     vertical scrollbar keeps the inherited thin/coloured style */
-  scrollbar-color: #94a3b8 #f1f5f9;
+.vendor-directory-main-scroll::-webkit-scrollbar-track {
+  margin: 4px 0;
 }
-.dark .vendor-directory-main-scroll {
-  scrollbar-color: #64748b #1e293b;
+.vendor-directory-main-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.vendor-directory-firefox-corner,
+.vendor-directory-firefox-vscroll {
+  display: none;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .vendor-directory-main-scroll {
+    scrollbar-width: none;
+  }
+  .vendor-directory-firefox-corner {
+    display: block;
+  }
+  .vendor-directory-firefox-vscroll {
+    display: block;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
 }
 
 /* Typography */
